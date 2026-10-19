@@ -14,9 +14,8 @@ namespace TeddyBench
         public bool NfcEnabled = false;
         public string NfcType = "Proxmark3";
         public bool DebugWindow = false;
+        public bool DownloadJson = true;
         public int CacheImageSize = 256;
-
-        public bool updateToniesJson = true;
 
         public int CustomTagNonPrintableMargin = 15;
         public int CustomTagGapX = 5;

@@ -46,8 +46,12 @@ namespace TeddyBench
         private string InternalContentDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(Application.ExecutablePath), "Content");
         private bool AutoOpenDrive = true;
         private Dictionary<ListViewTag, ListViewItem> RegisteredItems = new Dictionary<ListViewTag, ListViewItem>();
-        private static TonieTools.TonieData[] TonieInfos;
-        private static Dictionary<string, string> CustomTonies = new Dictionary<string, string>();
+
+        private static object TonieInfoLock = new object();
+        private static TonieTools.TonieData[] TonieInfo = new TonieTools.TonieData[0];
+        private static Dictionary<string, string> TonieInfoCustom = new Dictionary<string, string>();
+        private static string TonieInfoString = "";
+
         private Dictionary<string, Tuple<TonieAudio, DateTime>> CachedAudios = new Dictionary<string, Tuple<TonieAudio, DateTime>>();
         private ListViewItem LastSelectediItem = null;
         private RfidReaderBase RfidReader;
@@ -72,7 +76,7 @@ namespace TeddyBench
             public string Hash;
             public TonieTools.TonieData Info;
             public string Uid;
-            public int AudioId;
+            public uint AudioId;
 
             public ListViewTag(string filename)
             {
@@ -138,46 +142,101 @@ namespace TeddyBench
             }
         }
 
-        private void LoadJson()
+        public void LoadJson(bool force = false)
         {
             try
             {
-                if (Settings.updateToniesJson == true || !System.IO.File.Exists("tonies.json"))
+                string jsonContent = "";
+
+                if (Settings.DownloadJson || force || !File.Exists("tonies.json"))
                 {
                     try
                     {
-                        HttpWebRequest request = (HttpWebRequest)WebRequest.Create("http://gt-blog.de/JSON/tonies.json?source=TeddyBench&version=" + ThisAssembly.Git.BaseTag);
+                        TonieInfoString = "| Downloading...";
+                        HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.revvox.de/tonies.json?source=TeddyBench&version=" + ThisAssembly.Git.BaseTag);
                         HttpWebResponse response = (HttpWebResponse)request.GetResponse();
                         TextReader reader = new StreamReader(response.GetResponseStream());
-                        string content = reader.ReadToEnd();
-                        File.WriteAllText("tonies.json", content);
-
+                        jsonContent = reader.ReadToEnd();
+                        TonieInfoString = "| Downloaded";
                     }
                     catch (Exception e)
                     {
+                        TonieInfoString = "| Download Failed";
+                        ReportException("Downloader", e);
+                        return;
+                    }
+
+                    if (string.IsNullOrEmpty(jsonContent))
+                    {
+                        return;
+                    }
+                    bool written = false;
+                    for (int loop = 0; loop < 5; loop++)
+                    {
+                        try
+                        {
+                            File.WriteAllText("tonies.json", jsonContent);
+                            written = true;
+                            break;
+                        }
+                        catch (IOException e)
+                        {
+                            ReportException("Writing tonies.json", e);
+                            Thread.Sleep(100);
+                        }
+                    }
+
+                    if (!written)
+                    {
+                        TonieInfoString = "| Writing Failed - is the tonies.json accessible?";
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        jsonContent = File.ReadAllText("tonies.json");
+                    }
+                    catch (Exception e)
+                    {
+                        TonieInfoString = "| Reading tonies.json Failed";
+                        TonieInfo = new TonieTools.TonieData[0];
                     }
                 }
 
-                try
+                if(string.IsNullOrEmpty(jsonContent))
                 {
-                    TonieInfos = JsonConvert.DeserializeObject<TonieTools.TonieData[]>(File.ReadAllText("tonies.json"));
-                }
-                catch (Exception e)
-                {
-                    TonieInfos = new TonieTools.TonieData[0];
+                    /* failed to read or download. TonieInfoString is already set */
+                    return;
                 }
 
-                try
+                lock (TonieInfoLock)
                 {
-                    CustomTonies = JsonConvert.DeserializeObject<Dictionary<string, string>>(File.ReadAllText("customTonies.json"));
-                }
-                catch (FileNotFoundException e)
-                {
-                    CustomTonies = new Dictionary<string, string>();
-                }
-                catch (Exception e)
-                {
-                    CustomTonies = new Dictionary<string, string>();
+                    try
+                    {
+                        TonieInfoString = "| Parsing...";
+                        TonieInfo = JsonConvert.DeserializeObject<TonieTools.TonieData[]>(jsonContent);
+                        TonieInfoString = "";
+                    }
+                    catch (Exception e)
+                    {
+                        TonieInfoString = "| Parsing Failed";
+                        TonieInfo = new TonieTools.TonieData[0];
+                        ReportException("Parse tonies.json", e);
+                    }
+
+                    try
+                    {
+                        TonieInfoCustom = JsonConvert.DeserializeObject<Dictionary<string, string>>(File.ReadAllText("customTonies.json"));
+                    }
+                    catch (FileNotFoundException e)
+                    {
+                        TonieInfoCustom.Clear();
+                    }
+                    catch (Exception e)
+                    {
+                        TonieInfoCustom.Clear();
+                    }
                 }
             }
             catch (Exception e)
@@ -188,13 +247,16 @@ namespace TeddyBench
 
         void SaveJson()
         {
-            try
+            lock (TonieInfoLock)
             {
-                File.WriteAllText("customTonies.json", JsonConvert.SerializeObject(CustomTonies, Formatting.Indented));
-            }
-            catch (Exception e)
-            {
-                return;
+                try
+                {
+                    File.WriteAllText("customTonies.json", JsonConvert.SerializeObject(TonieInfoCustom, Formatting.Indented));
+                }
+                catch (Exception e)
+                {
+                    return;
+                }
             }
         }
 
@@ -215,9 +277,8 @@ namespace TeddyBench
             cmbSorting.SelectedIndex = 2;
             Text = TitleString;
 
-            LoadJson();
-            StartThreads();
 
+            StartThreads();
 
             UpdateCheckThread = new SafeThread(UpdateCheck, "UpdateCheckThread");
             UpdateCheckThread.Start();
@@ -233,10 +294,14 @@ namespace TeddyBench
                 LogWindow.LogLevel = LogWindow.eLogLevel.DebugVerbose;
                 enableDebugModeToolStripMenuItem.Checked = true;
             }
+            if (Settings.DownloadJson)
+            {
+                downloadToniesjsonOnStartupToolStripMenuItem.Checked = true;
+            }
 
             StatusBarTimer = new System.Windows.Forms.Timer();
             StatusBarTimer.Tick += (object sender, EventArgs e) => { UpdateStatusBar(); };
-            StatusBarTimer.Interval = 500;
+            StatusBarTimer.Interval = 250;
             StatusBarTimer.Start();
 
             // open internal content dir if exists
@@ -262,7 +327,7 @@ namespace TeddyBench
 
             if (e)
             {
-                MessageBox.Show("Flashing the device succeeded, it will reconnect now", "Flashing Proxmark3 done");
+                MessageBox.Show("Flashing the device succeeded, will reconnect now", "Flashing Proxmark3 done");
             }
             else
             {
@@ -358,6 +423,8 @@ namespace TeddyBench
 
         private void UpdateStatusBar()
         {
+            string text = "";
+
             if (RfidReader != null && RfidReader.Connected)
             {
                 if (!statusStrip1.Visible)
@@ -365,14 +432,40 @@ namespace TeddyBench
                     statusStrip1.Show();
                 }
                 string voltageString = Settings.DebugWindow ? ", " + RfidReader.AntennaVoltage.ToString("0.00", CultureInfo.InvariantCulture) + " V" : "";
-                statusLabel.Text = RfidReader.HardwareType + " (FW: " + (RfidReader.UnlockSupported ? "SLIX-L enabled" : "stock") + voltageString + ") found at " + RfidReader.CurrentPort + ". The UID of the tag will be automatically used where applicable.";
+
+                text += " | " + RfidReader.HardwareType + " (FW: " + (RfidReader.UnlockSupported ? "SLIX-L enabled" : "stock") + voltageString + ") found at " + RfidReader.CurrentPort + ". The UID of the tag will be automatically used where applicable.";
             }
-            else
+
+            lock (TonieInfoLock)
+            {
+                if (TonieInfo.Length == 0)
+                {
+                    text += " | No tonies.json loaded, consider downloading it";
+                }
+                else
+                {
+                    text += " | Have " + TonieInfo.Length + " entries in tonies.json";
+                }
+                if (!string.IsNullOrEmpty(TonieInfoString))
+                {
+                    text += " " + TonieInfoString;
+                }
+            }
+
+            if (text == "")
             {
                 if (statusStrip1.Visible)
                 {
                     statusStrip1.Hide();
                 }
+            }
+            else
+            {
+                if (!statusStrip1.Visible)
+                {
+                    statusStrip1.Show();
+                }
+                statusLabel.Text = text.Trim().Trim('|').Trim();
             }
         }
 
@@ -468,7 +561,7 @@ namespace TeddyBench
 
                             BeginInvoke(new Action(async () =>
                             {
-                                UpdateNotifyDialog dlg = new UpdateNotifyDialog(latestVersion, (string)latestRelease.name);
+                                UpdateNotifyDialog dlg = new UpdateNotifyDialog(latestVersion + " (yours: " + thisVersion + ")", (string)latestRelease.name);
                                 if (dlg.ShowDialog() == DialogResult.Yes)
                                 {
                                     await DownloadFile(url, zipName);
@@ -579,6 +672,12 @@ namespace TeddyBench
             ScanCardThreadStop = false;
             ScanCardThread = new SafeThread(ScanCardMain, "ScanCardThread");
             ScanCardThread.Start();
+
+
+            new SafeThread(() =>
+            {
+                LoadJson();
+            }, "JSON Downloader").Start();
         }
 
         private void ScanCardMain()
@@ -834,7 +933,12 @@ namespace TeddyBench
                                 LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "GetTonieAudio... done");
                                 string image = "";
                                 string hash = BitConverter.ToString(dumpFile.Header.Hash).Replace("-", "");
-                                var found = TonieInfos.Where(t => t.Hash.Where(h => h == hash).Count() > 0);
+                                IEnumerable<TonieTools.TonieData> found = new TonieTools.TonieData[0];
+
+                                lock (TonieInfoLock)
+                                {
+                                    found = TonieInfo.Where(t => t.Hash.Where(h => h == hash).Count() > 0);
+                                }
                                 string tonieName = "[" + tag.Uid + "]" + Environment.NewLine + "(unknown: " + dumpFile.Header.AudioId.ToString("X8") + ")";
 
                                 bool update = false;
@@ -850,10 +954,13 @@ namespace TeddyBench
                                     {
                                         tonieName = info.Model + " - " + tonieName;
                                     }
-                                    if (CustomTonies.ContainsKey(hash))
+                                    lock (TonieInfoLock)
                                     {
-                                        LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     known tonie, overriding name");
-                                        tonieName = CustomTonies[hash];
+                                        if (TonieInfoCustom.ContainsKey(hash))
+                                        {
+                                            LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     known tonie, overriding name");
+                                            tonieName = TonieInfoCustom[hash];
+                                        }
                                     }
                                     if (!string.IsNullOrEmpty(info.Pic) && !lstTonies.LargeImageList.Images.ContainsKey(hash))
                                     {
@@ -874,25 +981,28 @@ namespace TeddyBench
                                     tag.Info = new TonieTools.TonieData();
                                     image = "unknown";
 
-                                    if (CustomTonies.ContainsKey(hash))
+                                    lock (TonieInfoLock)
                                     {
-                                        LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     known custom tonie");
-                                        tonieName = CustomTonies[hash];
-                                        tag.Info.Title = tonieName;
-                                        image = "custom";
-                                        update = true;
-                                    }
-                                    else if (dumpFile.Header.AudioId < 0x50000000)
-                                    {
-                                        LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     unknown custom tonie");
-                                        tonieName = "Unnamed Teddy - " + tonieName;
-                                        tag.Info.Title = "Unnamed Teddy";
-                                        image = "custom";
-                                        update = true;
-                                    }
-                                    else
-                                    {
-                                        LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     Not found -> unknown");
+                                        if (TonieInfoCustom.ContainsKey(hash))
+                                        {
+                                            LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     known custom tonie");
+                                            tonieName = TonieInfoCustom[hash];
+                                            tag.Info.Title = tonieName;
+                                            image = "custom";
+                                            update = true;
+                                        }
+                                        else if (dumpFile.Header.AudioId < 0x50000000)
+                                        {
+                                            LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     unknown custom tonie");
+                                            tonieName = "Unnamed Teddy - " + tonieName;
+                                            tag.Info.Title = "Unnamed Teddy";
+                                            image = "custom";
+                                            update = true;
+                                        }
+                                        else
+                                        {
+                                            LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "     Not found -> unknown");
+                                        }
                                     }
                                 }
 
@@ -1107,7 +1217,16 @@ namespace TeddyBench
                         return;
                     }
 
-                    EncodeFile(ask.Uid, fileNames, id);
+                    TrackSortDialog sorter = new TrackSortDialog(fileNames);
+
+                    if(sorter.ShowDialog() == DialogResult.Cancel)
+                    {
+                        return;
+                    }
+
+                    string[] sorted = sorter.SortedFiles;
+
+                    EncodeFile(ask.Uid, sorted, id);
                 }
             }
         }
@@ -1201,7 +1320,7 @@ namespace TeddyBench
             }
         }
 
-        private void EncodeFile(string uid, string[] v, uint id = uint.MaxValue)
+        private void EncodeFile(string uid, string[] filenames, uint id = uint.MaxValue)
         {
             btnAdd.Enabled = false;
             btnDelete.Enabled = false;
@@ -1223,7 +1342,7 @@ namespace TeddyBench
                     {
                         id = (uint)(DateTimeOffset.Now.ToUnixTimeSeconds() - 0x50000000);
                     }
-                    audio = new TonieAudio(v, id, cbr: new EncodeCallback(this));
+                    audio = new TonieAudio(filenames, id, cbr: new EncodeCallback(this));
                 }
                 catch (Exception ex)
                 {
@@ -1459,11 +1578,14 @@ namespace TeddyBench
                 return;
             }
 
-            if (!CustomTonies.ContainsKey(tag.Hash))
+            lock (TonieInfoLock)
             {
-                CustomTonies.Add(tag.Hash, "");
+                if (!TonieInfoCustom.ContainsKey(tag.Hash))
+                {
+                    TonieInfoCustom.Add(tag.Hash, "");
+                }
+                TonieInfoCustom[tag.Hash] = e.Label;
             }
-            CustomTonies[tag.Hash] = e.Label;
 
             SaveJson();
         }
@@ -1700,7 +1822,12 @@ namespace TeddyBench
                         tags.Add("TeddyFile=" + file);
 
                         string hashString = BitConverter.ToString(dump.Header.Hash).Replace("-", "");
-                        var found = TonieInfos.Where(t => t.Hash.Contains(hashString));
+                        IEnumerable<TonieTools.TonieData> found = new TonieTools.TonieData[0];
+
+                        lock (TonieInfoLock)
+                        {
+                            found = TonieInfo.Where(t => t.Hash.Contains(hashString));
+                        }
                         TonieTools.TonieData info = null;
 
                         if (found.Count() > 0)
@@ -1944,61 +2071,21 @@ namespace TeddyBench
                 Settings.Username = form.Username;
                 SaveSettings();
 
-                bool success = await DiagnosticsSendInfo(str.ToString(), form.Username, form.Message, "Audio Report.txt");
-                if (success)
+                DiagStatus ret = await DiagnosticsSendInfo(str.ToString(), form.Username, form.Message, "Audio Report.txt");
+                if (ret.Success)
                 {
-                    MessageBox.Show("Success", "Report sent");
+                    MessageBox.Show("Report Successfully sent." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return true;
                 }
                 else
                 {
-                    MessageBox.Show("Error sending the report", "Report failure");
+                    MessageBox.Show("Error sending the report." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
 
             return false;
         }
 
-        private async void reportallFilesToolStripMenuItem_Click(object sender, EventArgs e)
-        {
-            if (lstTonies.Items.Count == 0)
-            {
-                return;
-            }
-
-            StringBuilder str = new StringBuilder();
-
-            str.AppendLine(" Reporting " + lstTonies.Items.Count + " files");
-            str.AppendLine("-----------------------------------");
-
-            foreach (ListViewItem t in lstTonies.Items)
-            {
-                ListViewTag tag = t.Tag as ListViewTag;
-
-                if ((tag.Info == null || tag.Info.Model == null) && tag.AudioId > 0x50000000)
-                {
-                    AddInfo(str, tag);
-                }
-            }
-
-            ReportForm form = new ReportForm(str.ToString());
-
-            if (form.ShowDialog() == DialogResult.OK)
-            {
-                Settings.Username = form.Username;
-                SaveSettings();
-
-                bool success = await DiagnosticsSendInfo(str.ToString(), form.Username, form.Message, "All Audio Report.txt");
-                if (success)
-                {
-                    MessageBox.Show("Success", "Report sent");
-                }
-                else
-                {
-                    MessageBox.Show("Error sending the report", "Report failure");
-                }
-            }
-        }
 
         private async void reportNFCTagToolStripMenuItem_Click(object sender, EventArgs e)
         {
@@ -2032,15 +2119,16 @@ namespace TeddyBench
                                 Settings.Username = form.Username;
                                 SaveSettings();
 
-                                bool success = await DiagnosticsSendInfo(str.ToString(), form.Username, form.Message, "Tag Dump.txt");
-                                if (success)
+                                DiagStatus ret= await DiagnosticsSendInfo(str.ToString(), form.Username, form.Message, "Tag Dump.txt");
+                                if (ret.Success)
                                 {
-                                    MessageBox.Show("Success", "Report sent");
+                                    MessageBox.Show("Report Successfully sent." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Information);
                                 }
                                 else
                                 {
-                                    MessageBox.Show("Error sending the report", "Report failure");
+                                    MessageBox.Show("Error sending the report." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Error);
                                 }
+
                             }
                         }
                         else
@@ -2105,20 +2193,32 @@ namespace TeddyBench
                 Settings.Username = form.Username;
                 SaveSettings();
 
-                bool success = await DiagnosticsSendInfo(content, form.Username, form.Message, "Antenna Report.txt");
-                if (success)
+                DiagStatus ret = await DiagnosticsSendInfo(content, form.Username, form.Message, "Antenna Report.txt");
+                if (ret.Success)
                 {
-                    MessageBox.Show("Success", "Report sent");
+                    MessageBox.Show("Report Successfully sent." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 else
                 {
-                    MessageBox.Show("Error sending the report", "Report failure");
+                    MessageBox.Show("Error sending the report." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
+
             }
         }
 
-        private async Task<bool> DiagnosticsSendInfo(string payload, string sender, string message, string filename)
+        public class DiagStatus
         {
+            public bool Success;
+            public string Message;
+        }
+
+        private async Task<DiagStatus> DiagnosticsSendInfo(string payload, string sender, string message, string filename)
+        {
+            DiagStatus ret = new DiagStatus();
+
+            ret.Success = false;
+            ret.Message = "";
+
             try
             {
                 HttpClient httpClient = new HttpClient();
@@ -2130,33 +2230,34 @@ namespace TeddyBench
                 form.Add(new StringContent(filename), "filename");
                 form.Add(new StringContent(GetVersion()), "version");
 
-                HttpResponseMessage response = await httpClient.PostAsync("https://g3gg0.magiclantern.fm/diag.php", form);
+                HttpResponseMessage response = await httpClient.PostAsync("https://api.revvox.de/diag", form);
                 response.EnsureSuccessStatusCode();
                 httpClient.Dispose();
                 string sd = response.Content.ReadAsStringAsync().Result;
 
                 LogWindow.Log(LogWindow.eLogLevel.Debug, sd);
 
-                if (sd != "")
-                {
-                    return true;
-                }
-                return false;
+                ret.Success = (response.StatusCode == HttpStatusCode.OK);
+                ret.Message = sd;
+                return ret;
             }
             catch (Exception ee)
             {
             }
-            return false;
+            return ret;
         }
 
         private void AddInfo(StringBuilder str, ListViewTag tag)
         {
-            string customName = null;
-            if (CustomTonies.ContainsKey(tag.Hash))
+            lock (TonieInfoLock)
             {
-                customName = CustomTonies[tag.Hash];
+                string customName = null;
+                if (TonieInfoCustom.ContainsKey(tag.Hash))
+                {
+                    customName = TonieInfoCustom[tag.Hash];
+                }
+                TonieTools.DumpInfo(str, TonieTools.eDumpFormat.FormatText, tag.FileName, TonieInfo, customName);
             }
-            TonieTools.DumpInfo(str, TonieTools.eDumpFormat.FormatText, tag.FileName, TonieInfos, customName);
         }
 
         private async void readContentToolStripMenuItem_Click(object sender, EventArgs e)
@@ -2344,19 +2445,25 @@ namespace TeddyBench
             TagOperationDialog opDlg = new TagOperationDialog();
 
             opDlg.Show();
-            Proxmark3.MeasurementResult result = RfidReader.MeasureAntenna();
-
-            opDlg.Close();
-
-            if (result == null)
+            try
             {
-                MessageBox.Show("Measurement failed.", "Failed");
-                return;
+                Proxmark3.MeasurementResult result = RfidReader.MeasureAntenna();
+
+                opDlg.Close();
+
+                if (result == null)
+                {
+                    MessageBox.Show("Measurement failed.", "Failed");
+                    return;
+                }
+
+                PlotAntennaForm form = new PlotAntennaForm(result);
+
+                form.ShowDialog();
             }
-
-            PlotAntennaForm form = new PlotAntennaForm(result);
-
-            form.ShowDialog();
+            catch (Exception ex)
+            {
+            }
         }
 
         private void flashFirmwareToolStripMenuItem_Click(object sender, EventArgs e)
@@ -2367,7 +2474,13 @@ namespace TeddyBench
             dlg.Filter = "Firmware ELF files (*.elf)|*.elf|All files (*.*)|*.*";
             if (dlg.ShowDialog() == DialogResult.OK)
             {
-                RfidReader.EnterBootloader(dlg.FileName);
+                try
+                {
+                    RfidReader.EnterBootloader(dlg.FileName);
+                }
+                catch (Exception ex)
+                {
+                }
             }
         }
 
@@ -2379,7 +2492,13 @@ namespace TeddyBench
             dlg.Filter = "Bootloader ELF files (*.elf)|*.elf|All files (*.*)|*.*";
             if (dlg.ShowDialog() == DialogResult.OK)
             {
-                RfidReader.EnterBootloader(dlg.FileName);
+                try
+                {
+                    RfidReader.EnterBootloader(dlg.FileName);
+                }
+                catch (Exception ex)
+                {
+                }
             }
         }
 
@@ -2537,15 +2656,16 @@ namespace TeddyBench
                 Settings.Username = form.Username;
                 SaveSettings();
 
-                bool success = DiagnosticsSendInfo(str.ToString(), form.Username, form.Message, "Exception.txt").Result;
-                if (success)
+                DiagStatus ret = DiagnosticsSendInfo(str.ToString(), form.Username, form.Message, "Exception.txt").Result;
+                if (ret.Success)
                 {
-                    MessageBox.Show("Success", "Report sent");
+                    MessageBox.Show("Report Successfully sent." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 else
                 {
-                    MessageBox.Show("Error sending the report", "Report failure");
+                    MessageBox.Show("Error sending the report." + Environment.NewLine + "Server response:" + Environment.NewLine + ret.Message + "", "Report sent", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
+
             }
         }
 
@@ -2794,6 +2914,20 @@ namespace TeddyBench
 
             // start a viewer.
             Process.Start(filename);
+        }
+
+        private void downloadToniesjsonOnStartupToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            Settings.DownloadJson = !downloadToniesjsonOnStartupToolStripMenuItem.Checked;
+            SaveSettings();
+        }
+
+        private void downloadToniesjsonNowToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            new SafeThread(() =>
+            {
+                LoadJson(true);
+            }, "JSON Downloader").Start();
         }
     }
 }

@@ -51,15 +51,17 @@
             this.tagsToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.createTagToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.createTagBacksideToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.optionsToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.downloadToniesjsonOnStartupToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.downloadToniesjsonNowToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.enableDebugModeToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.aboutToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripMenuItem1 = new System.Windows.Forms.ToolStripSeparator();
             this.diagnosticsToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.reportallFilesToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.reportselectedFilesToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.reportProxmarkAnToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.reportNFCTagToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.enableDebugModeToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.grpCardContent = new System.Windows.Forms.GroupBox();
             this.splitContainer1 = new System.Windows.Forms.SplitContainer();
             this.splitContainer2 = new System.Windows.Forms.SplitContainer();
@@ -111,6 +113,7 @@
             this.fileToolStripMenuItem,
             this.nFCReaderToolStripMenuItem,
             this.tagsToolStripMenuItem,
+            this.optionsToolStripMenuItem,
             this.helpToolStripMenuItem});
             this.menuStrip1.Location = new System.Drawing.Point(0, 0);
             this.menuStrip1.Name = "menuStrip1";
@@ -148,7 +151,7 @@
             this.advancedActionsToolStripMenuItem});
             this.nFCReaderToolStripMenuItem.Name = "nFCReaderToolStripMenuItem";
             this.nFCReaderToolStripMenuItem.Size = new System.Drawing.Size(81, 20);
-            this.nFCReaderToolStripMenuItem.Text = "NFC Reader";
+            this.nFCReaderToolStripMenuItem.Text = "&NFC Reader";
             // 
             // autodetectionEnabledToolStripMenuItem
             // 
@@ -182,6 +185,7 @@
             // 
             // emulateTagToolStripMenuItem
             // 
+            this.emulateTagToolStripMenuItem.Enabled = false;
             this.emulateTagToolStripMenuItem.Name = "emulateTagToolStripMenuItem";
             this.emulateTagToolStripMenuItem.Size = new System.Drawing.Size(226, 22);
             this.emulateTagToolStripMenuItem.Text = "Emulate tag";
@@ -215,6 +219,7 @@
             // 
             // consoleModeToolStripMenuItem
             // 
+            this.consoleModeToolStripMenuItem.Enabled = false;
             this.consoleModeToolStripMenuItem.Name = "consoleModeToolStripMenuItem";
             this.consoleModeToolStripMenuItem.Size = new System.Drawing.Size(226, 22);
             this.consoleModeToolStripMenuItem.Text = "Console mode (experts only)";
@@ -243,17 +248,46 @@
             this.createTagBacksideToolStripMenuItem.Text = "Create tag backside";
             this.createTagBacksideToolStripMenuItem.Click += new System.EventHandler(this.createTagBacksideToolStripMenuItem_Click);
             // 
+            // optionsToolStripMenuItem
+            // 
+            this.optionsToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.downloadToniesjsonOnStartupToolStripMenuItem,
+            this.downloadToniesjsonNowToolStripMenuItem,
+            this.enableDebugModeToolStripMenuItem});
+            this.optionsToolStripMenuItem.Name = "optionsToolStripMenuItem";
+            this.optionsToolStripMenuItem.Size = new System.Drawing.Size(61, 20);
+            this.optionsToolStripMenuItem.Text = "&Options";
+            // 
+            // downloadToniesjsonOnStartupToolStripMenuItem
+            // 
+            this.downloadToniesjsonOnStartupToolStripMenuItem.Name = "downloadToniesjsonOnStartupToolStripMenuItem";
+            this.downloadToniesjsonOnStartupToolStripMenuItem.Size = new System.Drawing.Size(245, 22);
+            this.downloadToniesjsonOnStartupToolStripMenuItem.Text = "Download tonies.json on startup";
+            this.downloadToniesjsonOnStartupToolStripMenuItem.Click += new System.EventHandler(this.downloadToniesjsonOnStartupToolStripMenuItem_Click);
+            // 
+            // downloadToniesjsonNowToolStripMenuItem
+            // 
+            this.downloadToniesjsonNowToolStripMenuItem.Name = "downloadToniesjsonNowToolStripMenuItem";
+            this.downloadToniesjsonNowToolStripMenuItem.Size = new System.Drawing.Size(245, 22);
+            this.downloadToniesjsonNowToolStripMenuItem.Text = "Download tonies.json now";
+            this.downloadToniesjsonNowToolStripMenuItem.Click += new System.EventHandler(this.downloadToniesjsonNowToolStripMenuItem_Click);
+            // 
+            // enableDebugModeToolStripMenuItem
+            // 
+            this.enableDebugModeToolStripMenuItem.Name = "enableDebugModeToolStripMenuItem";
+            this.enableDebugModeToolStripMenuItem.Size = new System.Drawing.Size(245, 22);
+            this.enableDebugModeToolStripMenuItem.Text = "Debug window";
+            this.enableDebugModeToolStripMenuItem.Click += new System.EventHandler(this.enableDebugModeToolStripMenuItem_Click);
+            // 
             // helpToolStripMenuItem
             // 
             this.helpToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.aboutToolStripMenuItem,
             this.toolStripMenuItem1,
             this.diagnosticsToolStripMenuItem,
-            this.reportallFilesToolStripMenuItem,
             this.reportselectedFilesToolStripMenuItem,
             this.reportProxmarkAnToolStripMenuItem,
-            this.reportNFCTagToolStripMenuItem,
-            this.enableDebugModeToolStripMenuItem});
+            this.reportNFCTagToolStripMenuItem});
             this.helpToolStripMenuItem.Name = "helpToolStripMenuItem";
             this.helpToolStripMenuItem.Size = new System.Drawing.Size(44, 20);
             this.helpToolStripMenuItem.Text = "&Help";
@@ -277,13 +311,6 @@
             this.diagnosticsToolStripMenuItem.Size = new System.Drawing.Size(291, 22);
             this.diagnosticsToolStripMenuItem.Text = "Diagnostics";
             // 
-            // reportallFilesToolStripMenuItem
-            // 
-            this.reportallFilesToolStripMenuItem.Name = "reportallFilesToolStripMenuItem";
-            this.reportallFilesToolStripMenuItem.Size = new System.Drawing.Size(291, 22);
-            this.reportallFilesToolStripMenuItem.Text = "Report *all unknown* files";
-            this.reportallFilesToolStripMenuItem.Click += new System.EventHandler(this.reportallFilesToolStripMenuItem_Click);
-            // 
             // reportselectedFilesToolStripMenuItem
             // 
             this.reportselectedFilesToolStripMenuItem.Name = "reportselectedFilesToolStripMenuItem";
@@ -306,13 +333,6 @@
             this.reportNFCTagToolStripMenuItem.Size = new System.Drawing.Size(291, 22);
             this.reportNFCTagToolStripMenuItem.Text = "Report detected NFC Tag";
             this.reportNFCTagToolStripMenuItem.Click += new System.EventHandler(this.reportNFCTagToolStripMenuItem_Click);
-            // 
-            // enableDebugModeToolStripMenuItem
-            // 
-            this.enableDebugModeToolStripMenuItem.Name = "enableDebugModeToolStripMenuItem";
-            this.enableDebugModeToolStripMenuItem.Size = new System.Drawing.Size(291, 22);
-            this.enableDebugModeToolStripMenuItem.Text = "Debug window";
-            this.enableDebugModeToolStripMenuItem.Click += new System.EventHandler(this.enableDebugModeToolStripMenuItem_Click);
             // 
             // grpCardContent
             // 
@@ -470,7 +490,7 @@
             // 
             this.btnSave.Location = new System.Drawing.Point(4, 61);
             this.btnSave.Name = "btnSave";
-            this.btnSave.Size = new System.Drawing.Size(96, 23);
+            this.btnSave.Size = new System.Drawing.Size(87, 23);
             this.btnSave.TabIndex = 1;
             this.btnSave.Text = "Save as .ogg...";
             this.btnSave.UseVisualStyleBackColor = true;
@@ -480,7 +500,7 @@
             // 
             this.btnDelete.Location = new System.Drawing.Point(4, 32);
             this.btnDelete.Name = "btnDelete";
-            this.btnDelete.Size = new System.Drawing.Size(96, 23);
+            this.btnDelete.Size = new System.Drawing.Size(87, 23);
             this.btnDelete.TabIndex = 0;
             this.btnDelete.Text = "Delete...";
             this.btnDelete.UseVisualStyleBackColor = true;
@@ -490,7 +510,7 @@
             // 
             this.btnAdd.Location = new System.Drawing.Point(4, 3);
             this.btnAdd.Name = "btnAdd";
-            this.btnAdd.Size = new System.Drawing.Size(96, 23);
+            this.btnAdd.Size = new System.Drawing.Size(87, 23);
             this.btnAdd.TabIndex = 0;
             this.btnAdd.Text = "Add...";
             this.btnAdd.UseVisualStyleBackColor = true;
@@ -696,7 +716,6 @@
         private System.Windows.Forms.ToolStripMenuItem autodetectionEnabledToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem advancedActionsToolStripMenuItem;
         private System.Windows.Forms.ToolStripSeparator toolStripMenuItem1;
-        private System.Windows.Forms.ToolStripMenuItem reportallFilesToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem reportselectedFilesToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem diagnosticsToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem readContentToolStripMenuItem;
@@ -728,6 +747,9 @@
         private System.Windows.Forms.ToolStripMenuItem assignRandomUID;
         private System.Windows.Forms.ToolStripMenuItem exportToMp3ToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem4;
+        private System.Windows.Forms.ToolStripMenuItem optionsToolStripMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem downloadToniesjsonOnStartupToolStripMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem downloadToniesjsonNowToolStripMenuItem;
     }
 }
 

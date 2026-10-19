@@ -76,7 +76,7 @@ namespace Id3.v2
             stream.Read(headerBytes, 0, 5);
 
             string magic = Encoding.ASCII.GetString(headerBytes, 0, 3);
-            return magic == "ID3" && headerBytes[3] >= 3;
+            return magic == "ID3" && headerBytes[3] == 3;
         }
 
         internal override Id3Tag ReadTag(Stream stream, out object additionalData)
@@ -134,7 +134,7 @@ namespace Id3.v2
                 string frameId = Encoding.UTF8.GetString(tagData, currentPos, 4);
                 currentPos += 4;
 
-                int frameSize = SyncSafeNumber.DecodeSafe(tagData, currentPos, 4);
+                int frameSize = SyncSafeNumber.DecodeNormal(tagData, currentPos, 4);
                 currentPos += 4;
 
                 var frameFlags = (ushort)((tagData[currentPos] << 0x08) + tagData[currentPos + 1]);

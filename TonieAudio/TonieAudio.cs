@@ -51,7 +51,7 @@ namespace TonieFile
         {
             public byte[] Hash;
             public int AudioLength;
-            public int AudioId;
+            public uint AudioId;
             public uint[] AudioChapters;
             public byte[] Padding;
             [SkipEncode]
@@ -112,7 +112,7 @@ namespace TonieFile
             minGranule = long.MaxValue;
             maxGranule = 0;
             highestGranule = 0;
-            var file = File.OpenRead(Filename);
+            var file = File.Open(Filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             long lastPos = 0x1000;
             long curPos = 0x1000;
             ulong lastGranule = 0;
@@ -163,6 +163,11 @@ namespace TonieFile
 
                 if (lastPos >= 0x2000 && curPos < file.Length)
                 {
+                    if(lastGranule > granule)
+                    {
+                        Console.WriteLine("[ERROR] granule at 0x" + curPos.ToString("X8") + " is lower than last.");
+                        break;
+                    }
                     ulong granuleDelta = granule - lastGranule;
 
                     minSegs = Math.Min(minSegs, segmentsCount);
@@ -180,7 +185,7 @@ namespace TonieFile
         public ulong[] ParsePositions()
         {
             List<ulong> positions = new List<ulong>();
-            var file = File.OpenRead(Filename);
+            var file = File.Open(Filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
             int curChapter = 0;
             long curPos = 0x1000;
@@ -367,7 +372,7 @@ namespace TonieFile
         public void ReadFile(string fileName, bool readAudio = true)
         {
             Filename = fileName;
-            var file = File.OpenRead(fileName);
+            var file = File.Open(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             if (file.Length < 0x2000)
             {
                 throw new InvalidDataException();
@@ -539,7 +544,7 @@ namespace TonieFile
                                 break;
 
                             case "ogg":
-                                stream = new OpusWaveStream(File.OpenRead(sourceFile), bitRate, channels);
+                                stream = new OpusWaveStream(File.Open(sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite), bitRate, channels);
                                 break;
                         }
 
@@ -614,7 +619,7 @@ namespace TonieFile
                 }
 
                 oggOut.Finish();
-                Header.AudioId = oggOut.LogicalStreamId;
+                Header.AudioId = (uint) oggOut.LogicalStreamId;
             }
 
             Audio = File.ReadAllBytes(tempName);
@@ -853,17 +858,17 @@ namespace TonieFile
             {
                 for (int chapter = 0; chapter < Header.AudioChapters.Length; chapter++)
                 {
+                    int trackNum = chapter + 1;
                     string fileName;
 
                     if (outFileName == "")
                     {
-                        fileName = Path.Combine(outDirectory, "Track_" + (chapter + 1) + ".ogg");
+                        fileName = Path.Combine(outDirectory, "Track #" + trackNum.ToString("00") + ".ogg");
                     }
                     else
                     {
-                        fileName = Path.Combine(outDirectory, outFileName + " - Track_" + (chapter + 1) + ".ogg");
+                        fileName = Path.Combine(outDirectory, outFileName + " - Track #" + trackNum.ToString("00") + ".ogg");
                     }
-                    
                     FileStream outFile = File.Open(fileName, FileMode.Create, FileAccess.Write);
                     OggPage[] metaPagesTrack = metaPages.Select(p => new OggPage(p)).ToArray();
 
