@@ -582,7 +582,7 @@ namespace TeddyBench
                         }
                     }
 
-                    dynamic latestRelease = await GithubLastRelease("toniebox-reverse-engineering", "teddy");
+                    dynamic latestRelease = await GithubLastRelease("StefanRiese", "teddy");
                     string latestVersion = latestRelease.tag_name;
 
                     if (latestVersion != thisVersion)
