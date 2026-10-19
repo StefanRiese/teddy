@@ -116,6 +116,8 @@ Requirements: Windows, Visual Studio 2022 (or MSBuild) with the .NET Framework 4
 
 The GitHub Actions workflow in `.github/workflows/build.yml` builds Debug and Release on every push and uploads `TeddyBench.exe` as an artifact.
 
+Releases: pushing a `v*` tag (or running the workflow manually with an existing release tag) packages `TeddyBench.zip` — `TeddyBench.exe`, its `.config`, the Proxmark3 firmware `fullimage.elf` and `Resources/ffmpeg.exe` — and attaches it to the GitHub release of that tag. TeddyBench's update check looks for that file in this repository's latest release.
+
 ## Credits
 
 Based on the work of the [toniebox-reverse-engineering](https://github.com/toniebox-reverse-engineering) community and [Hasenpups/teddy](https://github.com/Hasenpups/teddy).

@@ -3,8 +3,17 @@ name: TeddyBench Windows
 on:
   push:
     branches: [ "*" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "master" ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach TeddyBench.zip to (e.g. v1.8.0)"
+        required: true
+
+permissions:
+  contents: write
 
 jobs:
 
@@ -18,11 +27,14 @@ jobs:
 
     env:
       Solution_Name: Teddy.sln
+      # set when building a release: a pushed v* tag or the tag given to a manual run
+      RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
 
     steps:
     - name: Checkout
       uses: actions/checkout@v7
       with:
+        ref: ${{ inputs.tag }}
         fetch-depth: 0
 
     - name: Install .NET Core
@@ -50,3 +62,28 @@ jobs:
         path: TeddyBench/bin/${{ matrix.configuration }}/net48/win10-x64/TeddyBench.exe
       env:
         Configuration: ${{ matrix.configuration }}
+
+    # TeddyBench.zip layout matches upstream's releases, which the in-app update check downloads:
+    # TeddyBench.exe, its .config, the Proxmark3 firmware and ffmpeg for the ffmpeg-based MP3 export
+    - name: Package release
+      if: matrix.configuration == 'Release' && env.RELEASE_TAG != ''
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $out = "TeddyBench/bin/Release/net48/win10-x64"
+        New-Item -ItemType Directory -Force package/Resources | Out-Null
+        Copy-Item "$out/TeddyBench.exe", "$out/TeddyBench.exe.config" package/
+        Expand-Archive TeddyBench/Resources/ffmpeg.zip -DestinationPath package/Resources
+        # Proxmark3 firmware flashed by TeddyBench, unchanged since upstream v1.7.0
+        gh release download v1.7.0 -R toniebox-reverse-engineering/teddy -p TeddyBench.zip -D upstream
+        Expand-Archive upstream/TeddyBench.zip -DestinationPath upstream/content
+        Copy-Item upstream/content/fullimage.elf package/
+        Compress-Archive -Path package/* -DestinationPath TeddyBench.zip
+        Get-ChildItem -Recurse package | Select-Object FullName, Length
+
+    - name: Attach to release
+      if: matrix.configuration == 'Release' && env.RELEASE_TAG != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh release upload "$env:RELEASE_TAG" TeddyBench.zip --clobber -R "$env:GITHUB_REPOSITORY"
