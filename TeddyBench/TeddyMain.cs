@@ -70,8 +70,6 @@ namespace TeddyBench
         // absolute path to the bundled ffmpeg.exe, resolved next to the running exe rather than
         // relative to the process' current working directory (which isn't reliably the exe's own
         // folder, e.g. when launched from a shortcut/other tool with a different start-in folder).
-        // Only used by the parallel/fast mp3 export path - the original "Save as .mp3..." path is
-        // intentionally left untouched and keeps using its own relative lookup.
         private static readonly string FfmpegPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "ffmpeg.exe");
 
         // default folder offered by the export/save file dialogs, next to the running exe
@@ -1182,7 +1180,8 @@ namespace TeddyBench
 
                 coverFileName = Path.Combine(outDirectory, "cover" + extension);
 
-                if (File.Exists(coverFileName) && !overwrite)
+                // an empty file (e.g. left behind by an interrupted write) does not count as present
+                if (IsNonEmptyFile(coverFileName) && !overwrite)
                 {
                     return null;
                 }
@@ -1190,11 +1189,16 @@ namespace TeddyBench
                 string fullResCacheDir = Path.Combine("cache", "covers");
                 string fullResCacheFileName = Path.Combine(fullResCacheDir, hash + extension);
 
-                if (!overwrite && File.Exists(fullResCacheFileName))
+                if (!overwrite && IsNonEmptyFile(fullResCacheFileName))
                 {
                     File.Copy(fullResCacheFileName, coverFileName, true);
+                    DeleteOtherCoverFiles(outDirectory, coverFileName);
                     return "reused cached cover (" + fullResCacheFileName + ")";
                 }
+
+                // download into a temporary file first, so a broken-off download never leaves a
+                // truncated cover behind that later exports would mistake for a complete one
+                string tempFileName = coverFileName + ".part";
 
                 try
                 {
@@ -1202,10 +1206,22 @@ namespace TeddyBench
 
                     using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
                     using (Stream responseStream = response.GetResponseStream())
-                    using (FileStream outFile = File.Create(coverFileName))
+                    using (FileStream outFile = File.Create(tempFileName))
                     {
                         responseStream.CopyTo(outFile);
                     }
+
+                    if (!IsNonEmptyFile(tempFileName))
+                    {
+                        throw new IOException("server returned an empty image");
+                    }
+
+                    if (File.Exists(coverFileName))
+                    {
+                        File.Delete(coverFileName);
+                    }
+                    File.Move(tempFileName, coverFileName);
+                    DeleteOtherCoverFiles(outDirectory, coverFileName);
 
                     try
                     {
@@ -1224,13 +1240,24 @@ namespace TeddyBench
                 }
                 catch (Exception downloadEx)
                 {
-                    // download failed - fall back to the thumbnail already cached for the list view
+                    try { File.Delete(tempFileName); } catch { }
+
+                    // with overwrite, keep the cover that is already there rather than replacing it
+                    // with the low-resolution thumbnail
+                    if (IsNonEmptyFile(coverFileName))
+                    {
+                        return "download failed (" + downloadEx.Message + "), kept existing cover (" + coverFileName + ")";
+                    }
+
+                    // download failed - fall back to the thumbnail already cached for the list view.
+                    // that cache is always PNG, whatever format the original cover has.
                     string cachedThumbnail = Path.Combine("cache", hash + ".png");
 
                     if (File.Exists(cachedThumbnail))
                     {
-                        File.Copy(cachedThumbnail, coverFileName, true);
-                        return "download failed (" + downloadEx.Message + "), used local thumbnail cache instead (" + cachedThumbnail + ")";
+                        string thumbnailCoverFileName = Path.Combine(outDirectory, "cover.png");
+                        File.Copy(cachedThumbnail, thumbnailCoverFileName, true);
+                        return "download failed (" + downloadEx.Message + "), used local thumbnail cache instead (" + thumbnailCoverFileName + ")";
                     }
 
                     throw;
@@ -1241,6 +1268,38 @@ namespace TeddyBench
                 string message = "FAILED to save cover image '" + picUrl + "' to '" + coverFileName + "': " + ex.Message;
                 LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveCoverImage] " + message);
                 return message;
+            }
+        }
+
+        private static readonly string[] CoverExtensions = { ".jpg", ".jpeg", ".png" };
+
+        private static bool IsNonEmptyFile(string fileName)
+        {
+            return File.Exists(fileName) && new FileInfo(fileName).Length > 0;
+        }
+
+        /// <summary>
+        /// Returns the cover.&lt;ext&gt; saved by SaveCoverImage in this directory, or null if there is none.
+        /// </summary>
+        private static string FindCoverFile(string directory)
+        {
+            return CoverExtensions.Select(ext => Path.Combine(directory, "cover" + ext)).FirstOrDefault(IsNonEmptyFile);
+        }
+
+        /// <summary>
+        /// Removes stale covers with a different extension, e.g. a thumbnail fallback cover.png
+        /// once the full-resolution cover.jpg could be downloaded.
+        /// </summary>
+        private static void DeleteOtherCoverFiles(string directory, string keepFileName)
+        {
+            foreach (string ext in CoverExtensions)
+            {
+                string fileName = Path.Combine(directory, "cover" + ext);
+
+                if (!string.Equals(fileName, keepFileName, StringComparison.OrdinalIgnoreCase) && File.Exists(fileName))
+                {
+                    try { File.Delete(fileName); } catch { }
+                }
             }
         }
 
@@ -2051,7 +2110,7 @@ namespace TeddyBench
                         }
 
                         // if this tonie was already exported as MP3 before, skip it and move on to the next one
-                        if (saveAsMp3 && Directory.GetFiles(outDirectory, "*.mp3").Length > 0)
+                        if (saveAsMp3 && IsAlreadyExportedAsMp3(outDirectory))
                         {
                             progressDlg.Invoke(new Action(() =>
                             {
@@ -2075,6 +2134,8 @@ namespace TeddyBench
                         {
                             // list all ogg files in out directory
                             string[] fileEntries = Directory.GetFiles(outDirectory, "*.ogg");
+                            int trackCount = dump.Header.AudioChapters.Length;
+                            string coverFileName = FindCoverFile(outDirectory);
 
                             // loop over all files
                             for (int fileIndex = 0; fileIndex < fileEntries.Length; fileIndex++)
@@ -2093,20 +2154,13 @@ namespace TeddyBench
                                     progressDlg.SetDetail("Converting '" + Path.GetFileName(fileName) + "' to .mp3 (" + (fileIndex + 1) + "/" + fileEntries.Length + ")...");
                                 }));
 
-                                if (!System.IO.File.Exists(destinationFileName))
+                                bool conversionOk = IsNonEmptyFile(destinationFileName) || ConvertOggToMp3WithFfmpeg(fileName, destinationFileName, info, trackCount, coverFileName);
+
+                                // only delete the ogg once the mp3 exists, otherwise the track would be lost
+                                if (conversionOk)
                                 {
-                                    // do the conversion
-                                    if (info != null)
-                                    {
-                                        Execute("Resources/ffmpeg.exe", "-i \"" + fileName + "\" -metadata artist=\"" + info.Series + "\" -metadata album=\"" + info.Episodes + "\" \"" + destinationFileName + "\"");
-                                    }
-                                    else
-                                    {
-                                        Execute("Resources/ffmpeg.exe", "-i \"" + fileName + "\" \"" + destinationFileName + "\"");
-                                    }
+                                    System.IO.File.Delete(fileName);
                                 }
-                                // delete ogg file
-                                System.IO.File.Delete(fileName);
                             }
                         }
                     }
@@ -2281,7 +2335,7 @@ namespace TeddyBench
                         }
 
                         // if this tonie was already exported as MP3 before, skip it and move on to the next one
-                        if (Directory.GetFiles(outDirectory, "*.mp3").Length > 0)
+                        if (IsAlreadyExportedAsMp3(outDirectory))
                         {
                             progressDlg.Invoke(new Action(() =>
                             {
@@ -2303,6 +2357,8 @@ namespace TeddyBench
                         // convert all ogg files of this tonie to mp3 in parallel (bounded to the CPU
                         // core count) instead of spawning ffmpeg.exe sequentially, one track at a time
                         string[] fileEntries = Directory.GetFiles(outDirectory, "*.ogg");
+                        int trackCount = dump.Header.AudioChapters.Length;
+                        string coverFileName = FindCoverFile(outDirectory);
 
                         if (fileEntries.Length > 0)
                         {
@@ -2324,19 +2380,13 @@ namespace TeddyBench
 
                                 string destinationFileName = outDirectory + "\\" + Path.GetFileNameWithoutExtension(fileName) + ".mp3";
 
-                                if (!System.IO.File.Exists(destinationFileName))
-                                {
-                                    if (info != null)
-                                    {
-                                        Execute(FfmpegPath, "-i \"" + fileName + "\" -metadata artist=\"" + info.Series + "\" -metadata album=\"" + info.Episodes + "\" \"" + destinationFileName + "\"");
-                                    }
-                                    else
-                                    {
-                                        Execute(FfmpegPath, "-i \"" + fileName + "\" \"" + destinationFileName + "\"");
-                                    }
-                                }
+                                bool conversionOk = IsNonEmptyFile(destinationFileName) || ConvertOggToMp3WithFfmpeg(fileName, destinationFileName, info, trackCount, coverFileName);
 
-                                System.IO.File.Delete(fileName);
+                                // only delete the ogg once the mp3 exists, otherwise the track would be lost
+                                if (conversionOk)
+                                {
+                                    System.IO.File.Delete(fileName);
+                                }
 
                                 int done = Interlocked.Increment(ref convertedCount);
 
@@ -2523,11 +2573,8 @@ namespace TeddyBench
                             }));
                         }
 
-                        // if this tonie was already exported as MP3 before, skip it and move on to the next one.
-                        // a 0-byte mp3 (e.g. left behind by a native-DLL load failure interrupting
-                        // LameMP3FileWriter mid-construction) does not count as "already exported",
-                        // so a broken previous attempt doesn't permanently block a retry.
-                        if (Directory.GetFiles(outDirectory, "*.mp3").Any(f => new FileInfo(f).Length > 0))
+                        // if this tonie was already exported as MP3 before, skip it and move on to the next one
+                        if (IsAlreadyExportedAsMp3(outDirectory))
                         {
                             progressDlg.Invoke(new Action(() =>
                             {
@@ -2558,6 +2605,22 @@ namespace TeddyBench
                         // other export paths) via the existing Opus decoder used for playback, and
                         // encode straight to mp3 with NAudio.Lame - no ffmpeg process involved.
                         string[] fileEntries = Directory.GetFiles(outDirectory, "*.ogg");
+                        int trackCount = dump.Header.AudioChapters.Length;
+                        byte[] coverArt = null;
+
+                        try
+                        {
+                            string coverFileName = FindCoverFile(outDirectory);
+
+                            if (coverFileName != null)
+                            {
+                                coverArt = File.ReadAllBytes(coverFileName);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveSelectedNativeMp3] Failed to read cover for '" + displayName + "', exporting without embedded cover: " + ex.Message);
+                        }
 
                         if (fileEntries.Length > 0)
                         {
@@ -2587,14 +2650,19 @@ namespace TeddyBench
                                 {
                                     try
                                     {
-                                        ID3TagData id3Tag = info != null
-                                            ? new ID3TagData
-                                            {
-                                                Artist = info.Series,
-                                                Album = info.Episodes,
-                                                Title = Path.GetFileNameWithoutExtension(fileName)
-                                            }
-                                            : null;
+                                        int trackNumber = GetTrackNumber(fileName);
+                                        ID3TagData id3Tag = new ID3TagData
+                                        {
+                                            Title = (titles != null && trackNumber > 0 && trackNumber <= titles.Length) ? titles[trackNumber - 1] : Path.GetFileNameWithoutExtension(fileName),
+                                            Track = trackNumber > 0 ? trackNumber + "/" + trackCount : null,
+                                            AlbumArt = coverArt
+                                        };
+
+                                        if (info != null)
+                                        {
+                                            id3Tag.Artist = info.Series;
+                                            id3Tag.Album = !string.IsNullOrEmpty(info.Episodes) ? info.Episodes : info.Title;
+                                        }
 
                                         using (FileStream inputStream = File.OpenRead(fileName))
                                         using (OpusWaveStream opusStream = new OpusWaveStream(inputStream, 48000, 2))
@@ -2835,24 +2903,128 @@ namespace TeddyBench
             }
         }
 
-        private static string Execute(string exePath, string parameters)
+        /// <summary>
+        /// A tonie counts as exported once its directory has non-empty mp3s and no ogg is left
+        /// unconverted - so a partly failed export is picked up again instead of being skipped.
+        /// </summary>
+        private static bool IsAlreadyExportedAsMp3(string directory)
         {
-            string result = String.Empty;
+            return Directory.GetFiles(directory, "*.mp3").Any(IsNonEmptyFile) && Directory.GetFiles(directory, "*.ogg").Length == 0;
+        }
+
+        /// <summary>
+        /// DumpAudioFiles names the tracks "Track_01.ogg", "Track_02.ogg", ... - returns 0 if the
+        /// number can't be determined.
+        /// </summary>
+        private static int GetTrackNumber(string fileName)
+        {
+            Match match = Regex.Match(Path.GetFileNameWithoutExtension(fileName), @"Track_(\d+)$");
+
+            return match.Success ? int.Parse(match.Groups[1].Value) : 0;
+        }
+
+        /// <summary>
+        /// Quotes one command line argument following the Windows (CommandLineToArgvW) rules, so
+        /// values containing quotes - e.g. 'Der kleine König sagt "Gute Nacht"' - or trailing
+        /// backslashes reach the child process unchanged.
+        /// </summary>
+        private static string QuoteArgument(string argument)
+        {
+            StringBuilder quoted = new StringBuilder("\"");
+            int backslashes = 0;
+
+            foreach (char c in argument ?? "")
+            {
+                if (c == '\\')
+                {
+                    backslashes++;
+                    continue;
+                }
+
+                // backslashes are only special in front of a quote
+                quoted.Append('\\', c == '"' ? backslashes * 2 + 1 : backslashes);
+                quoted.Append(c);
+                backslashes = 0;
+            }
+
+            quoted.Append('\\', backslashes * 2);
+            quoted.Append('"');
+
+            return quoted.ToString();
+        }
+
+        /// <summary>
+        /// Converts one exported .ogg track to .mp3 with ffmpeg. The tags DumpAudioFiles wrote into
+        /// the ogg (track title, ...) are stream-level comments, which ffmpeg only carries over into
+        /// the mp3 when mapped explicitly. Adds artist, album and track number and embeds the cover,
+        /// if there is one. Returns true only if ffmpeg succeeded and wrote a non-empty mp3; on
+        /// failure no partial mp3 is left behind.
+        /// </summary>
+        private static bool ConvertOggToMp3WithFfmpeg(string oggFileName, string mp3FileName, TonieTools.TonieData info, int trackCount, string coverFileName)
+        {
+            StringBuilder args = new StringBuilder("-nostdin -y -i " + QuoteArgument(oggFileName));
+
+            if (coverFileName != null)
+            {
+                args.Append(" -i " + QuoteArgument(coverFileName));
+            }
+
+            args.Append(" -map 0:a -map_metadata 0:s:a:0");
+
+            if (coverFileName != null)
+            {
+                args.Append(" -map 1:v -c:v copy -disposition:v attached_pic -metadata:s:v title=\"Album cover\" -metadata:s:v comment=\"Cover (front)\"");
+            }
+
+            // without these, the ALBUM/ARTIST from the ogg are kept
+            if (info != null && !string.IsNullOrEmpty(info.Series))
+            {
+                args.Append(" -metadata artist=" + QuoteArgument(info.Series));
+            }
+            if (info != null && !string.IsNullOrEmpty(info.Episodes))
+            {
+                args.Append(" -metadata album=" + QuoteArgument(info.Episodes));
+            }
+
+            int trackNumber = GetTrackNumber(oggFileName);
+
+            if (trackNumber > 0)
+            {
+                args.Append(" -metadata track=" + trackNumber + "/" + trackCount);
+            }
+
+            // ID3v2.3 for compatibility - Windows Explorer and many players don't show v2.4 cover art
+            args.Append(" -id3v2_version 3 " + QuoteArgument(mp3FileName));
+
+            int exitCode;
 
             using (Process p = new Process())
             {
                 p.StartInfo.UseShellExecute = false;
                 p.StartInfo.CreateNoWindow = true;
-                p.StartInfo.RedirectStandardOutput = true;
-                p.StartInfo.FileName = exePath;
-                p.StartInfo.Arguments = parameters;
+                p.StartInfo.FileName = FfmpegPath;
+                p.StartInfo.Arguments = args.ToString();
                 p.Start();
                 p.WaitForExit();
-
-                result = p.StandardOutput.ReadToEnd();
+                exitCode = p.ExitCode;
             }
 
-            return result;
+            if (exitCode == 0 && IsNonEmptyFile(mp3FileName))
+            {
+                return true;
+            }
+
+            try { File.Delete(mp3FileName); } catch { }
+
+            // an unusable cover image must not cost the audio - retry without it
+            if (coverFileName != null)
+            {
+                LogWindow.Log(LogWindow.eLogLevel.Warning, "[ConvertOggToMp3WithFfmpeg] ffmpeg failed (exit code " + exitCode + ") for '" + oggFileName + "' with cover '" + coverFileName + "', retrying without cover");
+                return ConvertOggToMp3WithFfmpeg(oggFileName, mp3FileName, info, trackCount, null);
+            }
+
+            LogWindow.Log(LogWindow.eLogLevel.Warning, "[ConvertOggToMp3WithFfmpeg] ffmpeg failed (exit code " + exitCode + ") for '" + oggFileName + "', keeping the .ogg");
+            return false;
         }
 
         #endregion

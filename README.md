@@ -33,12 +33,14 @@ Select one or more Tonies and use one of the buttons next to the list:
 | Button | What it does |
 |---|---|
 | **Save as .ogg...** | Dumps the tracks as `Track_01.ogg`, `Track_02.ogg`, … |
-| **Save as .mp3...** | Converts each track to MP3 with ffmpeg, one track after another, with artist/album metadata. |
+| **Save as .mp3...** | Converts each track to MP3 with ffmpeg, one track after another. |
 | **Save as .mp3 (fast)...** | Same as above, but converts the tracks in parallel (up to one ffmpeg process per CPU core). |
 | **Save as .mp3 (native)...** | Converts in-process with the built-in LAME encoder (NAudio.Lame), also in parallel. Doesn't need `ffmpeg.exe`. |
 | **Update covers...** | Downloads the cover image again into folders that were already exported, without touching the audio. |
 
-Exports run in the background with a progress dialog and can be cancelled. The folder dialog starts in an `Export` folder next to `TeddyBench.exe`. You can choose whether each Tonie gets its own subfolder. Each export folder also gets a `cover.jpg`/`cover.png`. Covers are cached in `cache/covers`, and if the download fails the list-view thumbnail is used instead. Tonies whose folder already contains MP3 files are skipped, so an interrupted batch can be restarted.
+Exports run in the background with a progress dialog and can be cancelled. The folder dialog starts in an `Export` folder next to `TeddyBench.exe`. You can choose whether each Tonie gets its own subfolder. Each export folder also gets a `cover.jpg`/`cover.png`. Covers are cached in `cache/covers`, and if the download fails the list-view thumbnail is used instead. Tonies whose folder already contains MP3 files and no unconverted `.ogg` files are skipped, so an interrupted or partly failed batch can be restarted.
+
+All three MP3 modes write ID3v2.3 tags: artist (series), album (episode), track title from `tonies.json`, track number (`3/12`) and the cover as embedded album art. A track's `.ogg` is only deleted after its MP3 was written successfully; in the ffmpeg modes, a track whose cover image ffmpeg rejects is converted again without embedded art.
 
 ### NFC readers
 
