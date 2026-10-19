@@ -7,3 +7,8 @@
 /*/obj
 /packages
 *.user
+
+# Local runtime files
+teddyBench.cfg
+tonies.json
+TeddyBench/Resources/ffmpeg.exe
