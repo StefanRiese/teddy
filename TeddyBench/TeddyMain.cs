@@ -54,6 +54,7 @@ namespace TeddyBench
 
         private ConcurrentDictionary<string, Tuple<TonieAudio, DateTime>> CachedAudios = new ConcurrentDictionary<string, Tuple<TonieAudio, DateTime>>();
         private readonly object ImageCacheLock = new object();
+        private readonly HashSet<string> ImageCacheKeys = new HashSet<string>();
         private ListViewItem LastSelectediItem = null;
         private RfidReaderBase RfidReader;
         private bool AutoSelected;
@@ -992,17 +993,31 @@ namespace TeddyBench
                                     }
                                     if (!string.IsNullOrEmpty(info.Pic))
                                     {
+                                        /* ImageList is not thread-safe, so worker threads must not query it.
+                                         * Track requested keys separately and only touch the ImageList on the UI thread. */
+                                        bool load;
                                         lock (ImageCacheLock)
                                         {
-                                            if (!lstTonies.LargeImageList.Images.ContainsKey(hash))
+                                            load = ImageCacheKeys.Add(hash);
+                                        }
+                                        if (load)
+                                        {
+                                            Image img = GetImage(info.Pic, hash);
+                                            if (img != null)
                                             {
-                                                Image img = GetImage(info.Pic, hash);
-                                                if (img != null)
+                                                this.BeginInvoke(new Action(() =>
                                                 {
-                                                    this.BeginInvoke(new Action(() =>
+                                                    if (!lstTonies.LargeImageList.Images.ContainsKey(hash))
                                                     {
                                                         lstTonies.LargeImageList.Images.Add(hash, img);
-                                                    }));
+                                                    }
+                                                }));
+                                            }
+                                            else
+                                            {
+                                                lock (ImageCacheLock)
+                                                {
+                                                    ImageCacheKeys.Remove(hash);
                                                 }
                                             }
                                         }
