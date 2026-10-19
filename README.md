@@ -20,11 +20,25 @@ This repository is a fork of [toniebox-reverse-engineering/teddy](https://github
 - Automatically detects a Toniebox SD card (a drive with a `CONTENT` folder) and lists all Tonies with title and cover image, using `tonies.json` from [api.revvox.de](https://api.revvox.de/tonies.json).
 - If a `Content` folder exists next to `TeddyBench.exe`, it is opened on startup, which is handy for a local working copy.
 - Create custom Tonie files from MP3/Ogg files, rename entries, toggle the live flag, delete files.
-- Export Tonies as `.ogg`, as `.mp3` (via ffmpeg, with artist/album metadata), or with **Copy to MicroSD**, which copies the selected Tonie folders to another location such as an SD card.
+- Export the selected Tonies (see [Exporting audio](#exporting-audio)), or use **Copy to MicroSD** to copy the selected Tonie folders to another location such as an SD card.
 - Assign a new UID or a **random UID** to a Tonie file.
 - **Custom tag covers:** generate a printable PDF with round cover images for the selected Tonies (*Custom tag → Create tag cover*), and a matching backside with series name and model number (*Custom tag → Create tag backside*).
 - NFC support for reading tag UIDs and dumping/emulating tags with a Proxmark3 or a PN5180-based ESP reader (see below).
 - *Options* menu: enable/disable downloading `tonies.json` on startup, download it now, show the debug window.
+
+### Exporting audio
+
+Select one or more Tonies and use one of the buttons next to the list:
+
+| Button | What it does |
+|---|---|
+| **Save as .ogg...** | Dumps the tracks as `Track_01.ogg`, `Track_02.ogg`, … |
+| **Save as .mp3...** | Converts each track to MP3 with ffmpeg, one track after another, with artist/album metadata. |
+| **Save as .mp3 (fast)...** | Same as above, but converts the tracks in parallel (up to one ffmpeg process per CPU core). |
+| **Save as .mp3 (native)...** | Converts in-process with the built-in LAME encoder (NAudio.Lame), also in parallel. Doesn't need `ffmpeg.exe`. |
+| **Update covers...** | Downloads the cover image again into folders that were already exported, without touching the audio. |
+
+Exports run in the background with a progress dialog and can be cancelled. The folder dialog starts in an `Export` folder next to `TeddyBench.exe`. You can choose whether each Tonie gets its own subfolder. Each export folder also gets a `cover.jpg`/`cover.png`. Covers are cached in `cache/covers`, and if the download fails the list-view thumbnail is used instead. Tonies whose folder already contains MP3 files are skipped, so an interrupted batch can be restarted.
 
 ### NFC readers
 
@@ -95,7 +109,7 @@ The bit rate must be a multiple of 24 kbps, otherwise the output file is incompa
 Requirements: Windows, Visual Studio 2022 (or MSBuild) with the .NET Framework 4.8 developer pack.
 
 1. Open `Teddy.sln` and restore NuGet packages (`nuget restore Teddy.sln`).
-2. For MP3 export, extract `TeddyBench/Resources/ffmpeg.zip` into `TeddyBench/Resources/` so that `ffmpeg.exe` exists there. It is only shipped as a zip because the executable exceeds GitHub's file size limit.
+2. For the ffmpeg-based MP3 exports, extract `TeddyBench/Resources/ffmpeg.zip` into `TeddyBench/Resources/` so that `ffmpeg.exe` exists there. It is only shipped as a zip because the executable exceeds GitHub's file size limit, and the extracted file is git-ignored. The native MP3 export doesn't need it: its `libmp3lame` DLLs (`TeddyBench/Native/`) are embedded into `TeddyBench.exe` by Costura.
 3. Build the solution, e.g. `msbuild Teddy.sln -t:rebuild -p:Configuration=Release`.
 
 The GitHub Actions workflow in `.github/workflows/build.yml` builds Debug and Release on every push and uploads `TeddyBench.exe` as an artifact.
