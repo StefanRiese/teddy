@@ -40,8 +40,6 @@ namespace TeddyBench
         private SafeThread AnalyzeThread = null;
         private bool AnalyzeThreadStop = false;
         private SafeThread EncodeThread = null;
-        private SafeThread LogThread;
-        private bool LogThreadStop;
         private SafeThread UpdateCheckThread = null;
 
         private string CurrentDirectory = null;
@@ -689,13 +687,6 @@ namespace TeddyBench
                 EncodeThread.Join(100);
                 EncodeThread.Abort();
                 EncodeThread = null;
-            }
-            if (LogThread != null)
-            {
-                LogThreadStop = true;
-                LogThread.Join(100);
-                LogThread.Abort();
-                LogThread = null;
             }
             if (RfidReader != null)
             {

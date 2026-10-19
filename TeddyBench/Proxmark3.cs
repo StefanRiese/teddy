@@ -895,8 +895,6 @@ namespace TeddyBench
                     LogWindow.Log(LogWindow.eLogLevel.Debug, "[PM3] Emulate: Unhandled: " + response.Cmd);
                     return true;
             }
-
-            return false;
         }
 
         public enum eDbprintfFlags
