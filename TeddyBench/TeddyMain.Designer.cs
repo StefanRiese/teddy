@@ -73,6 +73,10 @@
             this.lstTonies = new System.Windows.Forms.ListView();
             this.columnHeader1 = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
             this.btnSave = new System.Windows.Forms.Button();
+            this.btnSaveMp3 = new System.Windows.Forms.Button();
+            this.btnSaveMp3Fast = new System.Windows.Forms.Button();
+            this.btnSaveMp3Native = new System.Windows.Forms.Button();
+            this.btnUpdateCovers = new System.Windows.Forms.Button();
             this.btnDelete = new System.Windows.Forms.Button();
             this.btnAdd = new System.Windows.Forms.Button();
             this.lblMessage = new System.Windows.Forms.Label();
@@ -363,10 +367,14 @@
             // splitContainer1.Panel2
             // 
             this.splitContainer1.Panel2.Controls.Add(this.btnSave);
+            this.splitContainer1.Panel2.Controls.Add(this.btnSaveMp3);
+            this.splitContainer1.Panel2.Controls.Add(this.btnSaveMp3Fast);
+            this.splitContainer1.Panel2.Controls.Add(this.btnSaveMp3Native);
+            this.splitContainer1.Panel2.Controls.Add(this.btnUpdateCovers);
             this.splitContainer1.Panel2.Controls.Add(this.btnDelete);
             this.splitContainer1.Panel2.Controls.Add(this.btnAdd);
             this.splitContainer1.Size = new System.Drawing.Size(972, 572);
-            this.splitContainer1.SplitterDistance = 877;
+            this.splitContainer1.SplitterDistance = 811;
             this.splitContainer1.SplitterWidth = 1;
             this.splitContainer1.TabIndex = 1;
             // 
@@ -390,7 +398,7 @@
             // splitContainer2.Panel2
             // 
             this.splitContainer2.Panel2.Controls.Add(this.lstTonies);
-            this.splitContainer2.Size = new System.Drawing.Size(877, 572);
+            this.splitContainer2.Size = new System.Drawing.Size(811, 572);
             this.splitContainer2.SplitterDistance = 36;
             this.splitContainer2.SplitterWidth = 1;
             this.splitContainer2.TabIndex = 1;
@@ -472,7 +480,7 @@
             this.lstTonies.Location = new System.Drawing.Point(0, 0);
             this.lstTonies.Name = "lstTonies";
             this.lstTonies.ShowItemToolTips = true;
-            this.lstTonies.Size = new System.Drawing.Size(877, 535);
+            this.lstTonies.Size = new System.Drawing.Size(811, 535);
             this.lstTonies.TabIndex = 0;
             this.lstTonies.TileSize = new System.Drawing.Size(64, 64);
             this.lstTonies.UseCompatibleStateImageBehavior = false;
@@ -487,20 +495,60 @@
             this.columnHeader1.Text = "Product Name";
             // 
             // btnSave
-            // 
+            //
             this.btnSave.Location = new System.Drawing.Point(4, 61);
             this.btnSave.Name = "btnSave";
-            this.btnSave.Size = new System.Drawing.Size(87, 23);
+            this.btnSave.Size = new System.Drawing.Size(150, 23);
             this.btnSave.TabIndex = 1;
             this.btnSave.Text = "Save as .ogg...";
             this.btnSave.UseVisualStyleBackColor = true;
             this.btnSave.Click += new System.EventHandler(this.btnSave_Click);
-            // 
+            //
+            // btnSaveMp3
+            //
+            this.btnSaveMp3.Location = new System.Drawing.Point(4, 90);
+            this.btnSaveMp3.Name = "btnSaveMp3";
+            this.btnSaveMp3.Size = new System.Drawing.Size(150, 23);
+            this.btnSaveMp3.TabIndex = 2;
+            this.btnSaveMp3.Text = "Save as .mp3...";
+            this.btnSaveMp3.UseVisualStyleBackColor = true;
+            this.btnSaveMp3.Click += new System.EventHandler(this.btnSaveMp3_Click);
+            //
+            // btnSaveMp3Fast
+            //
+            this.btnSaveMp3Fast.Location = new System.Drawing.Point(4, 119);
+            this.btnSaveMp3Fast.Name = "btnSaveMp3Fast";
+            this.btnSaveMp3Fast.Size = new System.Drawing.Size(150, 23);
+            this.btnSaveMp3Fast.TabIndex = 3;
+            this.btnSaveMp3Fast.Text = "Save as .mp3 (fast)...";
+            this.btnSaveMp3Fast.UseVisualStyleBackColor = true;
+            this.btnSaveMp3Fast.Click += new System.EventHandler(this.btnSaveMp3Fast_Click);
+            //
+            // btnSaveMp3Native
+            //
+            this.btnSaveMp3Native.Location = new System.Drawing.Point(4, 148);
+            this.btnSaveMp3Native.Name = "btnSaveMp3Native";
+            this.btnSaveMp3Native.Size = new System.Drawing.Size(150, 23);
+            this.btnSaveMp3Native.TabIndex = 4;
+            this.btnSaveMp3Native.Text = "Save as .mp3 (native)...";
+            this.btnSaveMp3Native.UseVisualStyleBackColor = true;
+            this.btnSaveMp3Native.Click += new System.EventHandler(this.btnSaveMp3Native_Click);
+            //
+            // btnUpdateCovers
+            //
+            this.btnUpdateCovers.Location = new System.Drawing.Point(4, 177);
+            this.btnUpdateCovers.Name = "btnUpdateCovers";
+            this.btnUpdateCovers.Size = new System.Drawing.Size(150, 23);
+            this.btnUpdateCovers.TabIndex = 5;
+            this.btnUpdateCovers.Text = "Update covers...";
+            this.btnUpdateCovers.UseVisualStyleBackColor = true;
+            this.btnUpdateCovers.Click += new System.EventHandler(this.btnUpdateCovers_Click);
+            //
             // btnDelete
             // 
             this.btnDelete.Location = new System.Drawing.Point(4, 32);
             this.btnDelete.Name = "btnDelete";
-            this.btnDelete.Size = new System.Drawing.Size(87, 23);
+            this.btnDelete.Size = new System.Drawing.Size(150, 23);
             this.btnDelete.TabIndex = 0;
             this.btnDelete.Text = "Delete...";
             this.btnDelete.UseVisualStyleBackColor = true;
@@ -510,7 +558,7 @@
             // 
             this.btnAdd.Location = new System.Drawing.Point(4, 3);
             this.btnAdd.Name = "btnAdd";
-            this.btnAdd.Size = new System.Drawing.Size(87, 23);
+            this.btnAdd.Size = new System.Drawing.Size(150, 23);
             this.btnAdd.TabIndex = 0;
             this.btnAdd.Text = "Add...";
             this.btnAdd.UseVisualStyleBackColor = true;
@@ -709,6 +757,10 @@
         private System.Windows.Forms.ComboBox cmbSorting;
         private System.Windows.Forms.ToolStripMenuItem exitToolStripMenuItem;
         private System.Windows.Forms.Button btnSave;
+        private System.Windows.Forms.Button btnSaveMp3;
+        private System.Windows.Forms.Button btnSaveMp3Fast;
+        private System.Windows.Forms.Button btnSaveMp3Native;
+        private System.Windows.Forms.Button btnUpdateCovers;
         private System.Windows.Forms.StatusStrip statusStrip1;
         private System.Windows.Forms.ToolStripStatusLabel statusLabel;
         private System.Windows.Forms.Label lblMessage;

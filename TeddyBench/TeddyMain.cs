@@ -1,4 +1,5 @@
-﻿using NAudio.Wave;
+﻿using NAudio.Lame;
+using NAudio.Wave;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using PdfSharp.Drawing;
@@ -6,6 +7,7 @@ using PdfSharp.Drawing.Layout;
 using PdfSharp.Pdf;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -52,7 +54,8 @@ namespace TeddyBench
         private static Dictionary<string, string> TonieInfoCustom = new Dictionary<string, string>();
         private static string TonieInfoString = "";
 
-        private Dictionary<string, Tuple<TonieAudio, DateTime>> CachedAudios = new Dictionary<string, Tuple<TonieAudio, DateTime>>();
+        private ConcurrentDictionary<string, Tuple<TonieAudio, DateTime>> CachedAudios = new ConcurrentDictionary<string, Tuple<TonieAudio, DateTime>>();
+        private readonly object ImageCacheLock = new object();
         private ListViewItem LastSelectediItem = null;
         private RfidReaderBase RfidReader;
         private bool AutoSelected;
@@ -63,6 +66,42 @@ namespace TeddyBench
         private System.Windows.Forms.Timer StatusBarTimer = null;
 
         private string TitleString => "TeddyBench - " + GetVersion();
+
+        // absolute path to the bundled ffmpeg.exe, resolved next to the running exe rather than
+        // relative to the process' current working directory (which isn't reliably the exe's own
+        // folder, e.g. when launched from a shortcut/other tool with a different start-in folder).
+        // Only used by the parallel/fast mp3 export path - the original "Save as .mp3..." path is
+        // intentionally left untouched and keeps using its own relative lookup.
+        private static readonly string FfmpegPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "ffmpeg.exe");
+
+        // default folder offered by the export/save file dialogs, next to the running exe
+        private static readonly string DefaultExportDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Export");
+
+        /// <summary>
+        /// Creates a FolderBrowserDialog pre-pointed at the "Export" directory next to the exe
+        /// (created on demand), so the user doesn't have to navigate there by hand every time.
+        /// Falls back to the dialog's normal default if that folder can't be created/accessed.
+        /// </summary>
+        private FolderBrowserDialog CreateExportFolderBrowserDialog()
+        {
+            FolderBrowserDialog dlg = new FolderBrowserDialog();
+
+            try
+            {
+                if (!Directory.Exists(DefaultExportDirectory))
+                {
+                    Directory.CreateDirectory(DefaultExportDirectory);
+                }
+
+                dlg.SelectedPath = DefaultExportDirectory;
+            }
+            catch (Exception ex)
+            {
+                LogWindow.Log(LogWindow.eLogLevel.Warning, "[CreateExportFolderBrowserDialog] Failed to prepare default export directory '" + DefaultExportDirectory + "': " + ex.Message);
+            }
+
+            return dlg;
+        }
 
         private SafeThread PlayThread = null;
         private bool PlayThreadStop = true;
@@ -918,7 +957,7 @@ namespace TeddyBench
                 lock (RegisteredItems)
                 {
                     LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "Rescanning");
-                    foreach (var entry in RegisteredItems)
+                    Parallel.ForEach(RegisteredItems, new ParallelOptions { MaxDegreeOfParallelism = 4 }, entry =>
                     {
                         ListViewTag tag = entry.Key;
                         LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "  Filename: " + entry.Key.FileName);
@@ -962,15 +1001,21 @@ namespace TeddyBench
                                             tonieName = TonieInfoCustom[hash];
                                         }
                                     }
-                                    if (!string.IsNullOrEmpty(info.Pic) && !lstTonies.LargeImageList.Images.ContainsKey(hash))
+                                    if (!string.IsNullOrEmpty(info.Pic))
                                     {
-                                        Image img = GetImage(info.Pic, hash);
-                                        if (img != null)
+                                        lock (ImageCacheLock)
                                         {
-                                            this.BeginInvoke(new Action(() =>
+                                            if (!lstTonies.LargeImageList.Images.ContainsKey(hash))
                                             {
-                                                lstTonies.LargeImageList.Images.Add(hash, img);
-                                            }));
+                                                Image img = GetImage(info.Pic, hash);
+                                                if (img != null)
+                                                {
+                                                    this.BeginInvoke(new Action(() =>
+                                                    {
+                                                        lstTonies.LargeImageList.Images.Add(hash, img);
+                                                    }));
+                                                }
+                                            }
                                         }
                                     }
                                     update = true;
@@ -1042,7 +1087,7 @@ namespace TeddyBench
                             {
                             }
                         }
-                    }
+                    });
                     LogWindow.Log(LogWindow.eLogLevel.DebugVerbose, "Done");
                 }
             }
@@ -1105,21 +1150,110 @@ namespace TeddyBench
             return null;
         }
 
+        /// <summary>
+        /// Stores the tonies.json cover art as "cover.<ext>" next to the exported audio files, so
+        /// media players/managers can pick it up as folder art. Checks a persistent full-resolution
+        /// cache (cache/covers/&lt;hash&gt;.&lt;ext&gt;) before hitting the network at all, since the same
+        /// cover otherwise gets re-downloaded from scratch for every export batch/output folder -
+        /// the per-directory "already present" check below only helps when re-exporting into the
+        /// exact same folder. On a cache miss, downloads the full-resolution picUrl and populates
+        /// that cache for next time; if the download fails for any reason (no network, broken URL,
+        /// timeout, ...), falls back to the thumbnail already cached locally for the list view
+        /// (cache/&lt;hash&gt;.png) - lower resolution (cropped/resized square), but better than no
+        /// cover at all. By default an existing cover.&lt;ext&gt; in THIS output directory is left
+        /// alone (so resuming/repeating a batch doesn't redo work); pass overwrite:true to bypass
+        /// both that check and the full-resolution cache and force a fresh download (used by the
+        /// "Update covers..." maintenance action). Returns a short human-readable outcome, so
+        /// callers can log/display what happened instead of it failing silently, or null if the
+        /// cover was already present and nothing was done.
+        /// </summary>
+        private string SaveCoverImage(string picUrl, string hash, string outDirectory, bool overwrite = false)
+        {
+            string coverFileName = "<unknown>";
+
+            try
+            {
+                string extension = Path.GetExtension(new Uri(picUrl).LocalPath);
+
+                if (string.IsNullOrEmpty(extension))
+                {
+                    extension = ".jpg";
+                }
+
+                coverFileName = Path.Combine(outDirectory, "cover" + extension);
+
+                if (File.Exists(coverFileName) && !overwrite)
+                {
+                    return null;
+                }
+
+                string fullResCacheDir = Path.Combine("cache", "covers");
+                string fullResCacheFileName = Path.Combine(fullResCacheDir, hash + extension);
+
+                if (!overwrite && File.Exists(fullResCacheFileName))
+                {
+                    File.Copy(fullResCacheFileName, coverFileName, true);
+                    return "reused cached cover (" + fullResCacheFileName + ")";
+                }
+
+                try
+                {
+                    HttpWebRequest request = (HttpWebRequest)WebRequest.Create(picUrl);
+
+                    using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                    using (Stream responseStream = response.GetResponseStream())
+                    using (FileStream outFile = File.Create(coverFileName))
+                    {
+                        responseStream.CopyTo(outFile);
+                    }
+
+                    try
+                    {
+                        if (!Directory.Exists(fullResCacheDir))
+                        {
+                            Directory.CreateDirectory(fullResCacheDir);
+                        }
+                        File.Copy(coverFileName, fullResCacheFileName, true);
+                    }
+                    catch (Exception)
+                    {
+                        // best-effort - the export itself already succeeded without the cache
+                    }
+
+                    return "downloaded (" + coverFileName + ")";
+                }
+                catch (Exception downloadEx)
+                {
+                    // download failed - fall back to the thumbnail already cached for the list view
+                    string cachedThumbnail = Path.Combine("cache", hash + ".png");
+
+                    if (File.Exists(cachedThumbnail))
+                    {
+                        File.Copy(cachedThumbnail, coverFileName, true);
+                        return "download failed (" + downloadEx.Message + "), used local thumbnail cache instead (" + cachedThumbnail + ")";
+                    }
+
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                string message = "FAILED to save cover image '" + picUrl + "' to '" + coverFileName + "': " + ex.Message;
+                LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveCoverImage] " + message);
+                return message;
+            }
+        }
+
         private TonieAudio GetTonieAudio(string fileName)
         {
             FileInfo info = new FileInfo(fileName);
-            if (CachedAudios.ContainsKey(fileName))
+            if (CachedAudios.TryGetValue(fileName, out Tuple<TonieAudio, DateTime> cachedItem) && cachedItem.Item2 == info.LastWriteTime)
             {
-                Tuple<TonieAudio, DateTime> cachedItem = CachedAudios[fileName];
-                if (cachedItem.Item2 == info.LastWriteTime)
-                {
-                    return cachedItem.Item1;
-                }
-                CachedAudios.Remove(fileName);
+                return cachedItem.Item1;
             }
 
             TonieAudio file = TonieAudio.FromFile(fileName, false);
-            CachedAudios.Add(fileName, new Tuple<TonieAudio, DateTime>(file, info.LastWriteTime));
+            CachedAudios[fileName] = new Tuple<TonieAudio, DateTime>(file, info.LastWriteTime);
 
             return file;
         }
@@ -1412,14 +1546,14 @@ namespace TeddyBench
             DeleteSelected();
         }
 
-        private void exportTooggToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void exportTooggToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            SaveSelected();
+            await SaveSelected();
         }
 
-        private void exportToMp3ToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void exportToMp3ToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            SaveSelected(true);
+            await SaveSelected(true);
         }
 
         private void exportToToolStripMenuItem_Click(object sender, EventArgs e)
@@ -1772,9 +1906,8 @@ namespace TeddyBench
             StartAnalyzeThread();
         }
 
-        private void SaveSelected(bool saveAsMp3 = false)
+        private async Task SaveSelected(bool saveAsMp3 = false)
         {
-            bool saveAll = true;
             bool createDirs = false;
 
             switch (MessageBox.Show("Create directories for selected file(s)?", "Save audio content", MessageBoxButtons.YesNoCancel))
@@ -1788,28 +1921,45 @@ namespace TeddyBench
                     break;
             }
 
-            FolderBrowserDialog dlg = new FolderBrowserDialog();
+            FolderBrowserDialog dlg = CreateExportFolderBrowserDialog();
 
-            if (dlg.ShowDialog() == DialogResult.OK)
+            if (dlg.ShowDialog() != DialogResult.OK)
             {
-                string outputLocation = dlg.SelectedPath;
+                return;
+            }
 
-                MessageBox.Show("You are about to export audio content of the tonie files on your SD card. " +
-                    "Please *do not* share these files as they could contain information which can be used to identify your tonie ID. " +
-                    "Also be aware that sharing these files is most likely illegal in your country.", "Legal information", MessageBoxButtons.OK);
+            string outputLocation = dlg.SelectedPath;
 
-                foreach (ListViewItem item in lstTonies.SelectedItems)
+            MessageBox.Show("You are about to export audio content of the tonie files on your SD card. " +
+                "Please *do not* share these files as they could contain information which can be used to identify your tonie ID. " +
+                "Also be aware that sharing these files is most likely illegal in your country.", "Legal information", MessageBoxButtons.OK);
+
+            List<ListViewTag> selected = lstTonies.SelectedItems.Cast<ListViewItem>()
+                .Select(i => i.Tag as ListViewTag)
+                .Where(t => t != null)
+                .ToList();
+
+            ExportProgressDialog progressDlg = new ExportProgressDialog();
+            progressDlg.Text = saveAsMp3 ? "Exporting to .mp3..." : "Exporting to .ogg...";
+            progressDlg.SetTotal(selected.Count);
+            progressDlg.Show(this);
+
+            bool cancelled = false;
+            int finishedCount = 0;
+
+            await Task.Run(() =>
+            {
+                for (int index = 0; index < selected.Count; index++)
                 {
-                    ListViewTag tag = item.Tag as ListViewTag;
-                    string current = item.Text;
-
-                    if (!saveAll)
+                    if (progressDlg.CancelRequested)
                     {
-                        if (MessageBox.Show("Save '" + current + "'?", "Save audio content?", MessageBoxButtons.YesNo) == DialogResult.No)
-                        {
-                            continue;
-                        }
+                        cancelled = true;
+                        break;
                     }
+
+                    ListViewTag tag = selected[index];
+                    int itemIndex = index;
+
                     try
                     {
                         string file = tag.FileName;
@@ -1840,6 +1990,14 @@ namespace TeddyBench
                         }
                         tags.Add("HASH=" + hashString);
 
+                        string displayName = info != null ? info.Title : Path.GetFileName(tag.FileName);
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetCurrentItem(displayName);
+                            progressDlg.SetDetail("Reading tonie file...");
+                        }));
+
                         string inFile = new FileInfo(file).Name;
                         string inDir = new FileInfo(file).DirectoryName;
                         string outDirectory = !string.IsNullOrEmpty(outputLocation) ? outputLocation : inDir;
@@ -1866,6 +2024,42 @@ namespace TeddyBench
                             return;
                         }
 
+                        // save the tonies.json cover art into the output directory alongside the audio
+                        string coverResult;
+
+                        if (info != null && !string.IsNullOrEmpty(info.Pic))
+                        {
+                            coverResult = SaveCoverImage(info.Pic, hashString, outDirectory);
+                        }
+                        else
+                        {
+                            coverResult = info == null
+                                ? "skipped (tonie not recognized, no cover URL known)"
+                                : "skipped (no cover URL in tonies.json for this tonie)";
+                        }
+
+                        // logged at Warning level (rather than Information) so it shows up in the
+                        // debug window without the user having to lower the log verbosity first
+                        if (coverResult != null)
+                        {
+                            LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveSelected] Cover art for '" + displayName + "': " + coverResult);
+
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Cover art: " + coverResult);
+                            }));
+                        }
+
+                        // if this tonie was already exported as MP3 before, skip it and move on to the next one
+                        if (saveAsMp3 && Directory.GetFiles(outDirectory, "*.mp3").Length > 0)
+                        {
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Skipping - .mp3 files already exist");
+                            }));
+                            continue;
+                        }
+
                         try
                         {
                             dump.DumpAudioFiles(outDirectory, "", false, tags.ToArray(), titles);
@@ -1881,15 +2075,29 @@ namespace TeddyBench
                         {
                             // list all ogg files in out directory
                             string[] fileEntries = Directory.GetFiles(outDirectory, "*.ogg");
+
                             // loop over all files
-                            foreach (string fileName in fileEntries)
+                            for (int fileIndex = 0; fileIndex < fileEntries.Length; fileIndex++)
                             {
-                                String destinationFileName = outDirectory + "\\" + Path.GetFileNameWithoutExtension(fileName) + ".mp3";
-                                if(!System.IO.File.Exists(destinationFileName))
-                                { 
+                                if (progressDlg.CancelRequested)
+                                {
+                                    cancelled = true;
+                                    break;
+                                }
+
+                                string fileName = fileEntries[fileIndex];
+                                string destinationFileName = outDirectory + "\\" + Path.GetFileNameWithoutExtension(fileName) + ".mp3";
+
+                                progressDlg.Invoke(new Action(() =>
+                                {
+                                    progressDlg.SetDetail("Converting '" + Path.GetFileName(fileName) + "' to .mp3 (" + (fileIndex + 1) + "/" + fileEntries.Length + ")...");
+                                }));
+
+                                if (!System.IO.File.Exists(destinationFileName))
+                                {
                                     // do the conversion
                                     if (info != null)
-                                    { 
+                                    {
                                         Execute("Resources/ffmpeg.exe", "-i \"" + fileName + "\" -metadata artist=\"" + info.Series + "\" -metadata album=\"" + info.Episodes + "\" \"" + destinationFileName + "\"");
                                     }
                                     else
@@ -1904,19 +2112,703 @@ namespace TeddyBench
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Failed to save file '" + tag.FileName + "'");
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            MessageBox.Show(progressDlg, "Failed to save file '" + tag.FileName + "': " + ex.Message);
+                        }));
+                    }
+                    finally
+                    {
+                        finishedCount++;
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetFinished(finishedCount);
+                        }));
                     }
 
                     Console.WriteLine("Export finished: ");
                 }
+            });
 
-                MessageBox.Show("Export finished.", "", MessageBoxButtons.OK);
+            progressDlg.Close();
+
+            MessageBox.Show(cancelled ? "Export cancelled." : "Export finished.", "", MessageBoxButtons.OK);
+        }
+
+        /// <summary>
+        /// Independent third export option: identical to SaveSelected(true) (same dump/cover/skip
+        /// logic), but converts the ogg tracks of a tonie to mp3 in parallel (bounded to the CPU
+        /// core count) instead of spawning ffmpeg.exe once per track sequentially. Kept as a fully
+        /// separate method on purpose, so the original "Save as .ogg..." and "Save as .mp3..."
+        /// paths above are not touched by this.
+        /// </summary>
+        private async Task SaveSelectedFastMp3()
+        {
+            bool createDirs = false;
+
+            switch (MessageBox.Show("Create directories for selected file(s)?", "Save audio content", MessageBoxButtons.YesNoCancel))
+            {
+                case DialogResult.Cancel:
+                    return;
+                case DialogResult.Yes:
+                    createDirs = true;
+                    break;
+                case DialogResult.No:
+                    break;
             }
+
+            FolderBrowserDialog dlg = CreateExportFolderBrowserDialog();
+
+            if (dlg.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            string outputLocation = dlg.SelectedPath;
+
+            MessageBox.Show("You are about to export audio content of the tonie files on your SD card. " +
+                "Please *do not* share these files as they could contain information which can be used to identify your tonie ID. " +
+                "Also be aware that sharing these files is most likely illegal in your country.", "Legal information", MessageBoxButtons.OK);
+
+            List<ListViewTag> selected = lstTonies.SelectedItems.Cast<ListViewItem>()
+                .Select(i => i.Tag as ListViewTag)
+                .Where(t => t != null)
+                .ToList();
+
+            ExportProgressDialog progressDlg = new ExportProgressDialog();
+            progressDlg.Text = "Exporting to .mp3 (parallel)...";
+            progressDlg.SetTotal(selected.Count);
+            progressDlg.Show(this);
+
+            bool cancelled = false;
+            int finishedCount = 0;
+
+            await Task.Run(() =>
+            {
+                for (int index = 0; index < selected.Count; index++)
+                {
+                    if (progressDlg.CancelRequested)
+                    {
+                        cancelled = true;
+                        break;
+                    }
+
+                    ListViewTag tag = selected[index];
+                    int itemIndex = index;
+
+                    try
+                    {
+                        string file = tag.FileName;
+
+                        TonieAudio dump = TonieAudio.FromFile(file);
+
+                        string[] titles = null;
+                        List<string> tags = new List<string>();
+                        tags.Add("TeddyVersion=" + GetVersion());
+                        tags.Add("TeddyFile=" + file);
+
+                        string hashString = BitConverter.ToString(dump.Header.Hash).Replace("-", "");
+                        var found = TonieInfo.Where(t => t.Hash.Contains(hashString));
+                        TonieTools.TonieData info = null;
+
+                        if (found.Count() > 0)
+                        {
+                            info = found.First();
+                            titles = info.Tracks;
+                            tags.Add("ALBUM=" + info.Title);
+                            tags.Add("ARTIST=" + info.Series);
+                            tags.Add("LANGUAGE=" + info.Language);
+                        }
+                        tags.Add("HASH=" + hashString);
+
+                        string displayName = info != null ? info.Title : Path.GetFileName(tag.FileName);
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetCurrentItem(displayName);
+                            progressDlg.SetDetail("Reading tonie file...");
+                        }));
+
+                        string inFile = new FileInfo(file).Name;
+                        string inDir = new FileInfo(file).DirectoryName;
+                        string outDirectory = !string.IsNullOrEmpty(outputLocation) ? outputLocation : inDir;
+
+                        if (createDirs)
+                        {
+                            if (info == null)
+                            {
+                                outDirectory = Path.Combine(outDirectory, dump.Header.AudioId.ToString("X8") + " - " + tag.Uid);
+                            }
+                            else
+                            {
+                                outDirectory = Path.Combine(outDirectory, RemoveInvalidChars(info.Title).Trim());
+                            }
+                            if (!Directory.Exists(outDirectory))
+                            {
+                                Directory.CreateDirectory(outDirectory);
+                            }
+                        }
+
+                        if (!Directory.Exists(outDirectory))
+                        {
+                            Console.WriteLine("Error: Output directory '" + outDirectory + "' does not exist");
+                            return;
+                        }
+
+                        // save the tonies.json cover art into the output directory alongside the audio
+                        string coverResult;
+
+                        if (info != null && !string.IsNullOrEmpty(info.Pic))
+                        {
+                            coverResult = SaveCoverImage(info.Pic, hashString, outDirectory);
+                        }
+                        else
+                        {
+                            coverResult = info == null
+                                ? "skipped (tonie not recognized, no cover URL known)"
+                                : "skipped (no cover URL in tonies.json for this tonie)";
+                        }
+
+                        if (coverResult != null)
+                        {
+                            LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveSelectedFastMp3] Cover art for '" + displayName + "': " + coverResult);
+
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Cover art: " + coverResult);
+                            }));
+                        }
+
+                        // if this tonie was already exported as MP3 before, skip it and move on to the next one
+                        if (Directory.GetFiles(outDirectory, "*.mp3").Length > 0)
+                        {
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Skipping - .mp3 files already exist");
+                            }));
+                            continue;
+                        }
+
+                        try
+                        {
+                            dump.DumpAudioFiles(outDirectory, "", false, tags.ToArray(), titles);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine("[ERROR] Failed to write .ogg/.cue'");
+                            Console.WriteLine("   Message:    " + ex.Message);
+                        }
+
+                        // convert all ogg files of this tonie to mp3 in parallel (bounded to the CPU
+                        // core count) instead of spawning ffmpeg.exe sequentially, one track at a time
+                        string[] fileEntries = Directory.GetFiles(outDirectory, "*.ogg");
+
+                        if (fileEntries.Length > 0)
+                        {
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Converting " + fileEntries.Length + " track(s) to .mp3 in parallel...");
+                            }));
+
+                            int convertedCount = 0;
+                            int degreeOfParallelism = Math.Max(1, Environment.ProcessorCount);
+
+                            Parallel.ForEach(fileEntries, new ParallelOptions { MaxDegreeOfParallelism = degreeOfParallelism }, (fileName, loopState) =>
+                            {
+                                if (progressDlg.CancelRequested)
+                                {
+                                    loopState.Stop();
+                                    return;
+                                }
+
+                                string destinationFileName = outDirectory + "\\" + Path.GetFileNameWithoutExtension(fileName) + ".mp3";
+
+                                if (!System.IO.File.Exists(destinationFileName))
+                                {
+                                    if (info != null)
+                                    {
+                                        Execute(FfmpegPath, "-i \"" + fileName + "\" -metadata artist=\"" + info.Series + "\" -metadata album=\"" + info.Episodes + "\" \"" + destinationFileName + "\"");
+                                    }
+                                    else
+                                    {
+                                        Execute(FfmpegPath, "-i \"" + fileName + "\" \"" + destinationFileName + "\"");
+                                    }
+                                }
+
+                                System.IO.File.Delete(fileName);
+
+                                int done = Interlocked.Increment(ref convertedCount);
+
+                                progressDlg.Invoke(new Action(() =>
+                                {
+                                    progressDlg.SetDetail("Converted " + done + " of " + fileEntries.Length + " track(s) to .mp3...");
+                                }));
+                            });
+
+                            if (progressDlg.CancelRequested)
+                            {
+                                cancelled = true;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            MessageBox.Show(progressDlg, "Failed to save file '" + tag.FileName + "': " + ex.Message);
+                        }));
+                    }
+                    finally
+                    {
+                        finishedCount++;
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetFinished(finishedCount);
+                        }));
+                    }
+
+                    Console.WriteLine("Export finished: ");
+                }
+            });
+
+            progressDlg.Close();
+
+            MessageBox.Show(cancelled ? "Export cancelled." : "Export finished.", "", MessageBoxButtons.OK);
+        }
+
+        /// <summary>
+        /// Independent fourth export option: same dump/cover/skip logic as the other export
+        /// methods, but converts ogg tracks to mp3 fully in-process (Concentus Opus decode via the
+        /// existing OpusWaveStream, straight into a NAudio.Lame encoder) instead of spawning
+        /// ffmpeg.exe at all. No external process, no 115MB ffmpeg.exe dependency for this path.
+        /// Tracks are still converted in parallel (bounded to the CPU core count). Kept as a fully
+        /// separate method on purpose - the ffmpeg-based export paths above are not touched.
+        /// </summary>
+        private async Task SaveSelectedNativeMp3()
+        {
+            bool createDirs = false;
+
+            switch (MessageBox.Show("Create directories for selected file(s)?", "Save audio content", MessageBoxButtons.YesNoCancel))
+            {
+                case DialogResult.Cancel:
+                    return;
+                case DialogResult.Yes:
+                    createDirs = true;
+                    break;
+                case DialogResult.No:
+                    break;
+            }
+
+            FolderBrowserDialog dlg = CreateExportFolderBrowserDialog();
+
+            if (dlg.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            string outputLocation = dlg.SelectedPath;
+
+            MessageBox.Show("You are about to export audio content of the tonie files on your SD card. " +
+                "Please *do not* share these files as they could contain information which can be used to identify your tonie ID. " +
+                "Also be aware that sharing these files is most likely illegal in your country.", "Legal information", MessageBoxButtons.OK);
+
+            List<ListViewTag> selected = lstTonies.SelectedItems.Cast<ListViewItem>()
+                .Select(i => i.Tag as ListViewTag)
+                .Where(t => t != null)
+                .ToList();
+
+            ExportProgressDialog progressDlg = new ExportProgressDialog();
+            progressDlg.Text = "Exporting to .mp3 (native)...";
+            progressDlg.SetTotal(selected.Count);
+            progressDlg.Show(this);
+
+            bool cancelled = false;
+            int finishedCount = 0;
+
+            await Task.Run(() =>
+            {
+                for (int index = 0; index < selected.Count; index++)
+                {
+                    if (progressDlg.CancelRequested)
+                    {
+                        cancelled = true;
+                        break;
+                    }
+
+                    ListViewTag tag = selected[index];
+                    int itemIndex = index;
+
+                    try
+                    {
+                        string file = tag.FileName;
+
+                        TonieAudio dump = TonieAudio.FromFile(file, false);
+
+                        string[] titles = null;
+                        List<string> tags = new List<string>();
+                        tags.Add("TeddyVersion=" + GetVersion());
+                        tags.Add("TeddyFile=" + file);
+
+                        string hashString = BitConverter.ToString(dump.Header.Hash).Replace("-", "");
+                        var found = TonieInfo.Where(t => t.Hash.Contains(hashString));
+                        TonieTools.TonieData info = null;
+
+                        if (found.Count() > 0)
+                        {
+                            info = found.First();
+                            titles = info.Tracks;
+                            tags.Add("ALBUM=" + info.Title);
+                            tags.Add("ARTIST=" + info.Series);
+                            tags.Add("LANGUAGE=" + info.Language);
+                        }
+                        tags.Add("HASH=" + hashString);
+
+                        string displayName = info != null ? info.Title : Path.GetFileName(tag.FileName);
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetCurrentItem(displayName);
+                            progressDlg.SetDetail("Reading tonie file...");
+                        }));
+
+                        string inFile = new FileInfo(file).Name;
+                        string inDir = new FileInfo(file).DirectoryName;
+                        string outDirectory = !string.IsNullOrEmpty(outputLocation) ? outputLocation : inDir;
+
+                        if (createDirs)
+                        {
+                            if (info == null)
+                            {
+                                outDirectory = Path.Combine(outDirectory, dump.Header.AudioId.ToString("X8") + " - " + tag.Uid);
+                            }
+                            else
+                            {
+                                outDirectory = Path.Combine(outDirectory, RemoveInvalidChars(info.Title).Trim());
+                            }
+                            if (!Directory.Exists(outDirectory))
+                            {
+                                Directory.CreateDirectory(outDirectory);
+                            }
+                        }
+
+                        if (!Directory.Exists(outDirectory))
+                        {
+                            Console.WriteLine("Error: Output directory '" + outDirectory + "' does not exist");
+                            return;
+                        }
+
+                        // save the tonies.json cover art into the output directory alongside the audio
+                        string coverResult;
+
+                        if (info != null && !string.IsNullOrEmpty(info.Pic))
+                        {
+                            coverResult = SaveCoverImage(info.Pic, hashString, outDirectory);
+                        }
+                        else
+                        {
+                            coverResult = info == null
+                                ? "skipped (tonie not recognized, no cover URL known)"
+                                : "skipped (no cover URL in tonies.json for this tonie)";
+                        }
+
+                        if (coverResult != null)
+                        {
+                            LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveSelectedNativeMp3] Cover art for '" + displayName + "': " + coverResult);
+
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Cover art: " + coverResult);
+                            }));
+                        }
+
+                        // if this tonie was already exported as MP3 before, skip it and move on to the next one.
+                        // a 0-byte mp3 (e.g. left behind by a native-DLL load failure interrupting
+                        // LameMP3FileWriter mid-construction) does not count as "already exported",
+                        // so a broken previous attempt doesn't permanently block a retry.
+                        if (Directory.GetFiles(outDirectory, "*.mp3").Any(f => new FileInfo(f).Length > 0))
+                        {
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Skipping - .mp3 files already exist");
+                            }));
+                            continue;
+                        }
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetDetail("Reading tonie file...");
+                        }));
+
+                        dump = TonieAudio.FromFile(file);
+
+                        try
+                        {
+                            dump.DumpAudioFiles(outDirectory, "", false, tags.ToArray(), titles);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine("[ERROR] Failed to write .ogg/.cue'");
+                            Console.WriteLine("   Message:    " + ex.Message);
+                        }
+
+                        // convert all ogg files of this tonie to mp3 fully in-process: decode the
+                        // standalone per-track ogg (written above by DumpAudioFiles, same as the
+                        // other export paths) via the existing Opus decoder used for playback, and
+                        // encode straight to mp3 with NAudio.Lame - no ffmpeg process involved.
+                        string[] fileEntries = Directory.GetFiles(outDirectory, "*.ogg");
+
+                        if (fileEntries.Length > 0)
+                        {
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Converting " + fileEntries.Length + " track(s) to .mp3 (native, parallel)...");
+                            }));
+
+                            int convertedCount = 0;
+                            int degreeOfParallelism = Math.Max(1, Environment.ProcessorCount);
+
+                            Parallel.ForEach(fileEntries, new ParallelOptions { MaxDegreeOfParallelism = degreeOfParallelism }, (fileName, loopState) =>
+                            {
+                                if (progressDlg.CancelRequested)
+                                {
+                                    loopState.Stop();
+                                    return;
+                                }
+
+                                string destinationFileName = outDirectory + "\\" + Path.GetFileNameWithoutExtension(fileName) + ".mp3";
+
+                                // treat a 0-byte mp3 (e.g. left behind by a native-DLL load failure
+                                // interrupting LameMP3FileWriter mid-construction) as "not converted"
+                                bool conversionOk = System.IO.File.Exists(destinationFileName) && new FileInfo(destinationFileName).Length > 0;
+
+                                if (!conversionOk)
+                                {
+                                    try
+                                    {
+                                        ID3TagData id3Tag = info != null
+                                            ? new ID3TagData
+                                            {
+                                                Artist = info.Series,
+                                                Album = info.Episodes,
+                                                Title = Path.GetFileNameWithoutExtension(fileName)
+                                            }
+                                            : null;
+
+                                        using (FileStream inputStream = File.OpenRead(fileName))
+                                        using (OpusWaveStream opusStream = new OpusWaveStream(inputStream, 48000, 2))
+                                        using (LameMP3FileWriter mp3Writer = new LameMP3FileWriter(destinationFileName, opusStream.WaveFormat, LAMEPreset.STANDARD, id3Tag))
+                                        {
+                                            opusStream.CopyTo(mp3Writer);
+                                        }
+
+                                        conversionOk = System.IO.File.Exists(destinationFileName) && new FileInfo(destinationFileName).Length > 0;
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveSelectedNativeMp3] Failed to convert '" + fileName + "' to mp3: " + ex.Message);
+
+                                        // don't leave a partial/corrupt mp3 behind on failure
+                                        try { System.IO.File.Delete(destinationFileName); } catch { }
+                                        conversionOk = false;
+                                    }
+                                }
+
+                                if (conversionOk)
+                                {
+                                    // only remove the source ogg once the mp3 is confirmed written -
+                                    // never delete it on a failed conversion, or the track is lost entirely
+                                    System.IO.File.Delete(fileName);
+                                }
+                                else
+                                {
+                                    LogWindow.Log(LogWindow.eLogLevel.Warning, "[SaveSelectedNativeMp3] Keeping '" + fileName + "' - mp3 conversion did not succeed, can be retried later.");
+                                }
+
+                                int done = Interlocked.Increment(ref convertedCount);
+
+                                progressDlg.Invoke(new Action(() =>
+                                {
+                                    progressDlg.SetDetail("Converted " + done + " of " + fileEntries.Length + " track(s) to .mp3 (native)...");
+                                }));
+                            });
+
+                            if (progressDlg.CancelRequested)
+                            {
+                                cancelled = true;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            MessageBox.Show(progressDlg, "Failed to save file '" + tag.FileName + "': " + ex.Message);
+                        }));
+                    }
+                    finally
+                    {
+                        finishedCount++;
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetFinished(finishedCount);
+                        }));
+                    }
+
+                    Console.WriteLine("Export finished: ");
+                }
+            });
+
+            progressDlg.Close();
+
+            MessageBox.Show(cancelled ? "Export cancelled." : "Export finished.", "", MessageBoxButtons.OK);
+        }
+
+        /// <summary>
+        /// Standalone maintenance action: (re-)fetches the cover art for already-exported tonies
+        /// into their existing export directories, without touching or re-exporting any audio.
+        /// Locates each tonie's export folder using the same "subdirectory per tonie?" / output
+        /// location logic as the export methods above, and skips any tonie whose folder doesn't
+        /// exist yet (nothing was exported there). Unlike the export paths - which leave an
+        /// existing cover.&lt;ext&gt; alone to avoid needless re-downloads on a resumed batch - this
+        /// always replaces it, since the whole point of this button is to refresh/fix covers.
+        /// </summary>
+        private async Task UpdateCoversOnly()
+        {
+            bool createDirs = false;
+
+            switch (MessageBox.Show("Were per-tonie subdirectories created when you exported?", "Update cover art", MessageBoxButtons.YesNoCancel))
+            {
+                case DialogResult.Cancel:
+                    return;
+                case DialogResult.Yes:
+                    createDirs = true;
+                    break;
+                case DialogResult.No:
+                    break;
+            }
+
+            FolderBrowserDialog dlg = CreateExportFolderBrowserDialog();
+
+            if (dlg.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            string outputLocation = dlg.SelectedPath;
+
+            List<ListViewTag> selected = lstTonies.SelectedItems.Cast<ListViewItem>()
+                .Select(i => i.Tag as ListViewTag)
+                .Where(t => t != null)
+                .ToList();
+
+            ExportProgressDialog progressDlg = new ExportProgressDialog();
+            progressDlg.Text = "Updating cover art...";
+            progressDlg.SetTotal(selected.Count);
+            progressDlg.Show(this);
+
+            bool cancelled = false;
+            int finishedCount = 0;
+
+            await Task.Run(() =>
+            {
+                for (int index = 0; index < selected.Count; index++)
+                {
+                    if (progressDlg.CancelRequested)
+                    {
+                        cancelled = true;
+                        break;
+                    }
+
+                    ListViewTag tag = selected[index];
+
+                    try
+                    {
+                        string file = tag.FileName;
+
+                        TonieAudio dump = TonieAudio.FromFile(file);
+
+                        string hashString = BitConverter.ToString(dump.Header.Hash).Replace("-", "");
+                        var found = TonieInfo.Where(t => t.Hash.Contains(hashString));
+                        TonieTools.TonieData info = found.Count() > 0 ? found.First() : null;
+
+                        string displayName = info != null ? info.Title : Path.GetFileName(tag.FileName);
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetCurrentItem(displayName);
+                            progressDlg.SetDetail("Locating export directory...");
+                        }));
+
+                        string inDir = new FileInfo(file).DirectoryName;
+                        string outDirectory = !string.IsNullOrEmpty(outputLocation) ? outputLocation : inDir;
+
+                        if (createDirs)
+                        {
+                            outDirectory = Path.Combine(outDirectory, info == null
+                                ? dump.Header.AudioId.ToString("X8") + " - " + tag.Uid
+                                : RemoveInvalidChars(info.Title).Trim());
+                        }
+
+                        if (!Directory.Exists(outDirectory))
+                        {
+                            progressDlg.Invoke(new Action(() =>
+                            {
+                                progressDlg.SetDetail("Skipping - export directory not found (" + outDirectory + ")");
+                            }));
+                            continue;
+                        }
+
+                        string coverResult;
+
+                        if (info != null && !string.IsNullOrEmpty(info.Pic))
+                        {
+                            // force-replace, even if a cover already exists in this directory
+                            coverResult = SaveCoverImage(info.Pic, hashString, outDirectory, overwrite: true);
+                        }
+                        else
+                        {
+                            coverResult = info == null
+                                ? "skipped (tonie not recognized, no cover URL known)"
+                                : "skipped (no cover URL in tonies.json for this tonie)";
+                        }
+
+                        LogWindow.Log(LogWindow.eLogLevel.Warning, "[UpdateCoversOnly] Cover art for '" + displayName + "': " + coverResult);
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetDetail("Cover art: " + coverResult);
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            MessageBox.Show(progressDlg, "Failed to update cover for '" + tag.FileName + "': " + ex.Message);
+                        }));
+                    }
+                    finally
+                    {
+                        finishedCount++;
+
+                        progressDlg.Invoke(new Action(() =>
+                        {
+                            progressDlg.SetFinished(finishedCount);
+                        }));
+                    }
+                }
+            });
+
+            progressDlg.Close();
+
+            MessageBox.Show(cancelled ? "Cover update cancelled." : "Cover update finished.", "", MessageBoxButtons.OK);
         }
 
         private void ExportSelected()
         {
-            FolderBrowserDialog dlg = new FolderBrowserDialog();
+            FolderBrowserDialog dlg = CreateExportFolderBrowserDialog();
 
             if (dlg.ShowDialog() != DialogResult.OK)
             {
@@ -2004,9 +2896,29 @@ namespace TeddyBench
             Application.Exit();
         }
 
-        private void btnSave_Click(object sender, EventArgs e)
+        private async void btnSave_Click(object sender, EventArgs e)
         {
-            SaveSelected();
+            await SaveSelected();
+        }
+
+        private async void btnSaveMp3_Click(object sender, EventArgs e)
+        {
+            await SaveSelected(true);
+        }
+
+        private async void btnSaveMp3Fast_Click(object sender, EventArgs e)
+        {
+            await SaveSelectedFastMp3();
+        }
+
+        private async void btnSaveMp3Native_Click(object sender, EventArgs e)
+        {
+            await SaveSelectedNativeMp3();
+        }
+
+        private async void btnUpdateCovers_Click(object sender, EventArgs e)
+        {
+            await UpdateCoversOnly();
         }
 
         public static string RemoveInvalidChars(string filename)

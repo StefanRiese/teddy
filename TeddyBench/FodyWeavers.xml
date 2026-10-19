@@ -1,3 +1,8 @@
 ﻿<Weavers xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="FodyWeavers.xsd">
-  <Costura />
+  <!-- NAudio.Lame (native mp3 export) ships libmp3lame.32.dll/libmp3lame.64.dll as loose native
+       DLLs copied next to the exe, unlike every other dependency here which Costura merges into
+       the single exe. Without this, copying just TeddyBench.exe elsewhere (the normal way this
+       app is distributed/run) breaks the native mp3 export with a DllNotFoundException. Embedding
+       them as unmanaged assemblies makes Costura extract+preload the right one at startup instead. -->
+  <Costura Unmanaged32Assemblies='libmp3lame.32' Unmanaged64Assemblies='libmp3lame.64' />
 </Weavers>

@@ -23,6 +23,9 @@
     <DebugType>embedded</DebugType>
     <AutoGenerateBindingRedirects>False</AutoGenerateBindingRedirects>
     <PlatformTarget>AnyCPU</PlatformTarget>
+    <!-- Required for embedding raw binary resources (the libmp3lame native DLLs below) instead
+         of string/resx-style ones. -->
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug %28Release settings%29|AnyCPU'">
     <OutputPath>bin\Debug %28Release settings%29\</OutputPath>
@@ -41,16 +44,32 @@
     <Content Include="fragen.png" />
   </ItemGroup>
   <ItemGroup>
+    <!-- NAudio.Lame's own build/NAudio.Lame.targets copies these next to the exe as loose
+         CopyToOutputDirectory files, which Costura's embedding step never looks at (it only
+         embeds assembly references), so the Unmanaged32/64Assemblies directive in
+         FodyWeavers.xml had nothing to actually load/extract. Embedding them here under
+         Costura's costura32./costura64. resource-name convention is what makes that directive
+         do anything. -->
+    <EmbeddedResource Include="Native\libmp3lame.32.dll">
+      <LogicalName>costura32.libmp3lame.32.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Native\libmp3lame.64.dll">
+      <LogicalName>costura64.libmp3lame.64.dll</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Costura.Fody" Version="5.7.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="ELFSharp" Version="2.13.2" />
     <PackageReference Include="GitInfo" Version="2.2.0" />
+    <PackageReference Include="System.Resources.Extensions" Version="6.0.0" />
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
     <PackageReference Include="Microsoft.NETCore.Platforms" Version="6.0.1" />
     <PackageReference Include="Microsoft.Win32.Primitives" Version="4.3.0" />
     <PackageReference Include="NAudio" Version="2.0.1" />
+    <PackageReference Include="NAudio.Lame" Version="2.1.0" />
     <PackageReference Include="NETStandard.Library" Version="2.0.3" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="Octokit" Version="0.50.0" />
