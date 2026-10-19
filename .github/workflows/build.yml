@@ -21,17 +21,17 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
     - name: Install .NET Core
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: 6.0.x
 
     - name: Setup MSBuild.exe
-      uses: microsoft/setup-msbuild@v1
+      uses: microsoft/setup-msbuild@v3
       with:
         msbuild-architecture: x64
 
@@ -44,7 +44,7 @@ jobs:
         Configuration: ${{ matrix.configuration }}
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: TeddyBench-${{ matrix.configuration }}
         path: TeddyBench/bin/${{ matrix.configuration }}/net48/win10-x64/TeddyBench.exe
