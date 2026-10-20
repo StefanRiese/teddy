@@ -25,8 +25,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is Apple Silicon, macos-15-intel builds for Intel Macs
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        # macos-latest is Apple Silicon; it also builds and tests for Intel (universal app)
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
 
@@ -60,11 +60,27 @@ jobs:
     - name: Test
       run: cargo test
 
+    # the Intel half of the universal app, run through Rosetta
+    - name: Test for Intel Macs
+      if: runner.os == 'macOS'
+      run: |
+        /usr/sbin/softwareupdate --install-rosetta --agree-to-license > /dev/null 2>&1 || true
+        rustup target add x86_64-apple-darwin
+        cargo test --target x86_64-apple-darwin
+
     - name: Build release
+      if: runner.os != 'macOS'
       run: cargo build --release
+
+    - name: Build universal macOS app
+      if: runner.os == 'macOS'
+      run: |
+        mkdir -p dist
+        packaging/macos/bundle.sh dist/teddy-rust-macos-universal.dmg
 
     # archives keep the executable bit, which artifacts would lose
     - name: Package
+      if: runner.os != 'macOS'
       shell: bash
       run: |
         name="teddy-rust-$(echo '${{ runner.os }}' | tr '[:upper:]' '[:lower:]')-$(echo '${{ runner.arch }}' | tr '[:upper:]' '[:lower:]')"
@@ -113,13 +129,14 @@ jobs:
         | File | Platform |
         |---|---|
         | \`teddy-rust-windows-x64.zip\` | Windows (64 bit) |
-        | \`teddy-rust-macos-arm64.tar.gz\` | macOS (Apple Silicon) |
-        | \`teddy-rust-macos-x64.tar.gz\` | macOS (Intel) |
+        | \`teddy-rust-macos-universal.dmg\` | macOS 11 or later, Apple Silicon and Intel |
         | \`teddy-rust-linux-x64.tar.gz\` | Linux (x86-64, needs ALSA for playback) |
 
-        Each archive contains \`teddybench\` (GUI) and \`teddy\` (command line). See the README in the archive.
+        Each download contains TeddyBench (GUI) and \`teddy\` (command line). See the README inside.
+        On macOS, drag TeddyBench.app into Applications.
 
-        - The macOS binaries are not signed: right-click → Open the first time, or run \`xattr -d com.apple.quarantine teddybench teddy\`.
+        - The macOS app is not signed with an Apple Developer ID: the first time, right-click it → Open,
+          or run \`xattr -dr com.apple.quarantine /Applications/TeddyBench.app\`.
         - NFC readers are not supported yet. The C# TeddyBench (v1.x releases) stays available.
         NOTES
         gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --title "TeddyBench ${TAG#rust-v} (Rust port, preview)" --notes-file notes.md --prerelease --latest=false --verify-tag

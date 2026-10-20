@@ -16,6 +16,8 @@ cargo build --release
 ```
 
 libopus and LAME are compiled from source, which needs CMake and a C compiler.
+On macOS, `packaging/macos/bundle.sh <file.dmg>` builds TeddyBench.app and `teddy` as universal
+binaries (Apple Silicon and Intel) and packs them into a disk image.
 On Linux, audio playback also needs the ALSA headers (`libasound2-dev` on Debian/Ubuntu).
 
 ## Usage

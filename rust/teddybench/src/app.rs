@@ -236,10 +236,15 @@ impl TeddyBenchApp {
         let custom_names = TonieDb::load_custom_names(&data_dir.custom_tonies_json());
 
         /* a directory given on the command line, or a Content folder next to the program, like the original */
-        let start_dir = std::env::args_os().nth(1).map(PathBuf::from).or_else(|| {
-            let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-            Some(exe_dir.join("Content")).filter(|d| d.is_dir())
-        });
+        /* older macOS passes a process serial number (-psn_...) when started from the Finder */
+        let start_dir = std::env::args_os()
+            .skip(1)
+            .find(|a| !a.to_string_lossy().starts_with("-psn"))
+            .map(PathBuf::from)
+            .or_else(|| {
+                let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+                Some(exe_dir.join("Content")).filter(|d| d.is_dir())
+            });
 
         let ctx = cc.egui_ctx.clone();
         let scanner = Scanner::start(
