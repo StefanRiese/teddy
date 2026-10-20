@@ -1,7 +1,7 @@
 name: Rust port reference files
 
 # Builds the C# Teddy.exe and runs it on the inputs in rust/tests/fixtures/inputs.
-# The uploaded reference files are committed to rust/tests/fixtures/reference and used by the Rust tests.
+# The reference files are committed back to the branch (rust/tests/fixtures/reference) and used by the Rust tests.
 on:
   workflow_dispatch:
   push:
@@ -10,6 +10,9 @@ on:
       - "rust/tests/fixtures/inputs/**"
       - "rust/tests/fixtures/generate_reference.ps1"
       - ".github/workflows/rust-reference.yml"
+
+permissions:
+  contents: write
 
 jobs:
 
@@ -46,3 +49,15 @@ jobs:
       with:
         name: rust-reference
         path: rust/tests/fixtures/reference
+
+    # pushes made with the workflow token do not trigger workflows, so this does not loop
+    - name: Commit reference files
+      shell: pwsh
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add -A rust/tests/fixtures/reference
+        git diff --cached --quiet
+        if ($LASTEXITCODE -eq 0) { Write-Host "Reference files unchanged"; exit 0 }
+        git commit -m "Update Rust port reference files from Teddy.exe"
+        git push origin "HEAD:$env:GITHUB_REF_NAME"
