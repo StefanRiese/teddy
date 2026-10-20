@@ -25,7 +25,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macos-latest is Apple Silicon, macos-15-intel builds for Intel Macs
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
 
     runs-on: ${{ matrix.os }}
 
@@ -113,6 +114,7 @@ jobs:
         |---|---|
         | \`teddy-rust-windows-x64.zip\` | Windows (64 bit) |
         | \`teddy-rust-macos-arm64.tar.gz\` | macOS (Apple Silicon) |
+        | \`teddy-rust-macos-x64.tar.gz\` | macOS (Intel) |
         | \`teddy-rust-linux-x64.tar.gz\` | Linux (x86-64, needs ALSA for playback) |
 
         Each archive contains \`teddybench\` (GUI) and \`teddy\` (command line). See the README in the archive.
