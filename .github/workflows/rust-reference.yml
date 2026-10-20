@@ -1,0 +1,48 @@
+name: Rust port reference files
+
+# Builds the C# Teddy.exe and runs it on the inputs in rust/tests/fixtures/inputs.
+# The uploaded reference files are committed to rust/tests/fixtures/reference and used by the Rust tests.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "rust-port" ]
+    paths:
+      - "rust/tests/fixtures/inputs/**"
+      - "rust/tests/fixtures/generate_reference.ps1"
+      - ".github/workflows/rust-reference.yml"
+
+jobs:
+
+  reference:
+
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Setup MSBuild.exe
+      uses: microsoft/setup-msbuild@v3
+      with:
+        msbuild-architecture: x64
+
+    - name: Nuget restore
+      run: nuget restore Teddy.sln
+
+    - name: Build Teddy
+      run: msbuild Teddy/Teddy.csproj -t:rebuild -property:Configuration=Release
+
+    - name: Generate reference files
+      shell: pwsh
+      run: |
+        $teddy = Get-ChildItem -Recurse -Filter Teddy.exe Teddy/bin | Select-Object -First 1
+        Write-Host "Using $($teddy.FullName)"
+        rust/tests/fixtures/generate_reference.ps1 -Teddy $teddy.FullName
+
+    - name: Upload reference files
+      uses: actions/upload-artifact@v7
+      with:
+        name: rust-reference
+        path: rust/tests/fixtures/reference
