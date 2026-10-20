@@ -150,6 +150,14 @@ enum Dialog {
     TagLayout(TagLayoutDraft),
 }
 
+/// A selection frame being dragged in the grid
+struct FrameSelect {
+    /// Where the drag started, relative to the top left of the grid content (moves with scrolling)
+    start: egui::Pos2,
+    /// Selection when the drag started, kept with Ctrl/Cmd
+    base: BTreeSet<PathBuf>,
+}
+
 struct RunningJob {
     title: String,
     status: Arc<JobStatus>,
@@ -191,6 +199,7 @@ pub struct TeddyBenchApp {
     selection: BTreeSet<PathBuf>,
     /// Anchor for shift-click range selection
     anchor: Option<PathBuf>,
+    frame_select: Option<FrameSelect>,
     sort: SortBy,
     dialog: Option<Dialog>,
     job: Option<RunningJob>,
@@ -274,6 +283,7 @@ impl TeddyBenchApp {
             thumbs_requested: HashSet::new(),
             selection: BTreeSet::new(),
             anchor: None,
+            frame_select: None,
             sort: SortBy::Date,
             dialog: None,
             job: None,
@@ -886,11 +896,33 @@ impl TeddyBenchApp {
         let row_height = |r: &Row| if matches!(r, Row::Header(_)) { HEADER_HEIGHT } else { tile.y + spacing };
         let total: f32 = rows.iter().map(row_height).sum();
 
+        /* position of every tile relative to the content, for the selection frame */
+        let mut tile_rects: Vec<(usize, Rect)> = Vec::new();
+        let mut y = 0.0;
+        for row in &rows {
+            if let Row::Tiles(items) = row {
+                for (col, &i) in items.iter().enumerate() {
+                    tile_rects.push((i, Rect::from_min_size(egui::pos2(col as f32 * (tile.x + spacing), y), tile)));
+                }
+            }
+            y += row_height(row);
+        }
+
         let mut clicked: Option<(PathBuf, egui::Modifiers)> = None;
+        /* dragging the content only scrolls on touch screens, so mouse drags draw the selection frame */
         egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
-            ui.set_height(total);
+            ui.set_height(total.max(viewport.height()));
             ui.set_width(width);
             let origin = ui.min_rect().min;
+
+            /* the background below the tiles: dragging draws a selection frame, a click clears the selection */
+            let background = ui.interact(
+                Rect::from_min_size(origin, Vec2::new(width, total.max(viewport.height()))),
+                Id::unique("grid_background"),
+                Sense::click_and_drag(),
+            );
+            self.selection_frame(ui, &background, origin, &tile_rects);
+
             let mut y = 0.0;
             for row in &rows {
                 let h = row_height(row);
@@ -922,6 +954,65 @@ impl TeddyBenchApp {
 
         if let Some((path, modifiers)) = clicked {
             self.click(&path, modifiers, &order);
+        }
+    }
+
+    /// Rubber band selection: everything the frame touches is selected, with Ctrl/Cmd in addition
+    /// to the previous selection. Scrolls when dragging at the top or bottom edge.
+    fn selection_frame(&mut self, ui: &mut egui::Ui, background: &egui::Response, origin: egui::Pos2, tiles: &[(usize, Rect)]) {
+        let modifiers = ui.input(|i| i.modifiers);
+        let pointer = ui.input(|i| i.pointer.interact_pos());
+
+        if background.clicked() && !modifiers.command && !modifiers.shift {
+            self.selection.clear();
+            self.anchor = None;
+        }
+        if background.drag_started() {
+            /* the drag is recognized after a few pixels; start the frame where the button went down */
+            if let Some(p) = ui.input(|i| i.pointer.press_origin()).or(pointer) {
+                let base = if modifiers.command { self.selection.clone() } else { BTreeSet::new() };
+                self.frame_select = Some(FrameSelect {
+                    start: p - origin.to_vec2(),
+                    base,
+                });
+            }
+        }
+        if background.drag_stopped() {
+            self.frame_select = None;
+        }
+
+        let (Some(frame), Some(p)) = (&self.frame_select, pointer) else { return };
+        if !background.dragged() {
+            return;
+        }
+        let current = p - origin.to_vec2();
+        let area = Rect::from_two_pos(frame.start, current);
+        let mut selection = frame.base.clone();
+        for (i, rect) in tiles {
+            if rect.intersects(area) {
+                selection.insert(self.entries[*i].file.path.clone());
+            }
+        }
+        self.selection = selection;
+
+        let visuals = ui.visuals();
+        let screen_area = area.translate(origin.to_vec2());
+        ui.painter().rect_filled(screen_area, 2.0, visuals.selection.bg_fill.gamma_multiply(0.25));
+        ui.painter().rect_stroke(screen_area, 2.0, visuals.selection.stroke, egui::StrokeKind::Inside);
+
+        /* keep scrolling while the pointer is at the edge of the visible area */
+        let clip = ui.clip_rect();
+        let edge = 24.0;
+        let speed = if p.y < clip.top() + edge {
+            (clip.top() + edge - p.y).min(edge)
+        } else if p.y > clip.bottom() - edge {
+            -(p.y - (clip.bottom() - edge)).min(edge)
+        } else {
+            0.0
+        };
+        if speed != 0.0 {
+            ui.scroll_with_delta(Vec2::new(0.0, speed));
+            ui.ctx().request_repaint();
         }
     }
 
