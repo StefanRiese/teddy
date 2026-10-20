@@ -13,8 +13,11 @@ use teddybench::library::{Analysis, FoundFile, Kind, Resolved, TonieDb};
 use teddybench::player::{Player, TonieSource};
 use teddybench::scanner::{Command, Event, Scanner};
 use teddybench::settings::{DataDir, Settings};
+use teddybench::tagpdf::{TagLayout, TagSide};
 use teddybench::uid::{is_valid_uid, random_uid, UID_PREFIX};
-use teddybench::{actions, export, fsattr, VERSION};
+use teddybench::{actions, applog, export, fsattr, tagpdf, VERSION};
+
+const RELEASES_URL: &str = "https://github.com/StefanRiese/teddy/releases";
 use tonie_core::tonies::TonieData;
 
 const MIN_ICON: u32 = 32;
@@ -125,6 +128,17 @@ struct ExportDialog {
     out_dir: String,
 }
 
+/// The CustomTag* settings while they are edited
+struct TagLayoutDraft {
+    margin: i32,
+    gap_x: i32,
+    gap_y: i32,
+    initial_column: i32,
+    initial_row: i32,
+    size: i32,
+    outline_width: f64,
+}
+
 enum Dialog {
     NewTonie(NewTonie),
     AssignUid { path: PathBuf, uid: String },
@@ -133,6 +147,7 @@ enum Dialog {
     Export(ExportDialog),
     Message { title: String, text: String },
     About,
+    TagLayout(TagLayoutDraft),
 }
 
 struct RunningJob {
@@ -159,6 +174,7 @@ enum Action {
     CopyToSd,
     DownloadJson,
     SelectAll,
+    TagPdf(TagSide),
 }
 
 pub struct TeddyBenchApp {
@@ -283,10 +299,9 @@ impl TeddyBenchApp {
     }
 
     fn message(&mut self, title: &str, text: impl Into<String>) {
-        self.dialog = Some(Dialog::Message {
-            title: title.into(),
-            text: text.into(),
-        });
+        let text = text.into();
+        applog::info(format!("{title}: {text}"));
+        self.dialog = Some(Dialog::Message { title: title.into(), text });
     }
 
     fn load_json(&mut self, download: bool, ctx: &egui::Context) {
@@ -584,6 +599,7 @@ impl TeddyBenchApp {
             }
             Action::DownloadJson => self.load_json(true, ctx),
             Action::SelectAll => self.selection = self.entries.iter().map(|e| e.file.path.clone()).collect(),
+            Action::TagPdf(side) => self.create_tag_pdf(side),
         }
     }
 
@@ -686,6 +702,28 @@ impl TeddyBenchApp {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            ui.menu_button("Custom tag", |ui| {
+                let any = !self.selection.is_empty();
+                if ui.add_enabled(any, egui::Button::new("Create tag cover...")).clicked() {
+                    actions.push(Action::TagPdf(TagSide::Cover));
+                }
+                if ui.add_enabled(any, egui::Button::new("Create tag backside...")).clicked() {
+                    actions.push(Action::TagPdf(TagSide::Backside));
+                }
+                ui.separator();
+                if ui.button("Print layout...").clicked() {
+                    let s = &self.settings;
+                    self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {
+                        margin: s.custom_tag_non_printable_margin,
+                        gap_x: s.custom_tag_gap_x,
+                        gap_y: s.custom_tag_gap_y,
+                        initial_column: s.custom_tag_initial_column,
+                        initial_row: s.custom_tag_initial_row,
+                        size: s.custom_tag_size,
+                        outline_width: s.custom_tag_outline_width,
+                    }));
+                }
+            });
             ui.menu_button("Options", |ui| {
                 if ui.checkbox(&mut self.settings.download_json, "Download tonies.json on startup").changed() {
                     self.save_settings();
@@ -693,10 +731,16 @@ impl TeddyBenchApp {
                 if ui.button("Download tonies.json now").clicked() {
                     actions.push(Action::DownloadJson);
                 }
+                if ui.checkbox(&mut self.settings.debug_window, "Debug window").changed() {
+                    self.save_settings();
+                }
                 ui.separator();
                 ui.label(format!("Data directory: {}", self.data_dir.0.display()));
             });
             ui.menu_button("Help", |ui| {
+                if ui.button("Releases page").on_hover_text(RELEASES_URL).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(RELEASES_URL));
+                }
                 if ui.button("About").clicked() {
                     self.dialog = Some(Dialog::About);
                 }
@@ -985,6 +1029,10 @@ impl TeddyBenchApp {
                     ui.heading(format!("TeddyBench {VERSION}"));
                     ui.label("Manage the audio files on a Toniebox SD card.");
                     ui.hyperlink_to("github.com/StefanRiese/teddy", "https://github.com/StefanRiese/teddy");
+                    ui.horizontal(|ui| {
+                        ui.label("New versions:");
+                        ui.hyperlink_to("Releases page", RELEASES_URL);
+                    });
                     ui.add_space(8.0);
                     ui.label(
                         "This tool is in no way endorsed by the creator of the Tonie Boxes. Its purpose is solely meant for understanding the file \
@@ -994,6 +1042,44 @@ impl TeddyBenchApp {
                     ui.button("Close").clicked()
                 });
                 keep = !(r.inner || r.should_close());
+            }
+            Dialog::TagLayout(d) => {
+                let r = egui::Modal::new(Id::unique("tag_layout")).show(ctx, |ui| {
+                    ui.heading("Print layout for custom tags");
+                    ui.label(egui::RichText::new("A4 page, all values in millimeters").weak());
+                    egui::Grid::new("tag_layout_grid").num_columns(2).show(ui, |ui| {
+                        let field = |ui: &mut egui::Ui, label: &str, v: &mut i32, range: std::ops::RangeInclusive<i32>| {
+                            ui.label(label);
+                            ui.add(egui::DragValue::new(v).range(range));
+                            ui.end_row();
+                        };
+                        field(ui, "Tag diameter", &mut d.size, 10..=100);
+                        field(ui, "Non-printable margin", &mut d.margin, 0..=50);
+                        field(ui, "Gap between columns", &mut d.gap_x, 0..=50);
+                        field(ui, "Gap between rows", &mut d.gap_y, 0..=50);
+                        field(ui, "Start in column (0 = first)", &mut d.initial_column, 0..=20);
+                        field(ui, "Start in row (0 = first)", &mut d.initial_row, 0..=30);
+                        ui.label("Cutting outline width (0 = none)");
+                        ui.add(egui::DragValue::new(&mut d.outline_width).range(0.0..=3.0).speed(0.05).fixed_decimals(2));
+                        ui.end_row();
+                    });
+                    ui.label(egui::RichText::new("Start column and row let you continue on a partly used sheet.").weak());
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| (ui.button("OK").clicked(), ui.button("Cancel").clicked())).inner
+                });
+                let (ok, cancel) = r.inner;
+                if ok {
+                    let s = &mut self.settings;
+                    s.custom_tag_non_printable_margin = d.margin;
+                    s.custom_tag_gap_x = d.gap_x;
+                    s.custom_tag_gap_y = d.gap_y;
+                    s.custom_tag_initial_column = d.initial_column;
+                    s.custom_tag_initial_row = d.initial_row;
+                    s.custom_tag_size = d.size;
+                    s.custom_tag_outline_width = d.outline_width;
+                    self.save_settings();
+                }
+                keep = !(ok || cancel || r.should_close());
             }
             Dialog::Rename { hash, name } => {
                 let r = egui::Modal::new(Id::unique("rename")).show(ctx, |ui| {
@@ -1170,6 +1256,108 @@ impl TeddyBenchApp {
             }
             job.finish();
         });
+    }
+
+    fn create_tag_pdf(&mut self, side: TagSide) {
+        /* only Tonies from tonies.json have a cover, series and model number */
+        let tonies: Vec<(TonieData, String)> = self
+            .selected_entries()
+            .iter()
+            .filter_map(|e| Some((e.info()?.clone(), e.analysis()?.hash.clone())))
+            .collect();
+        let skipped = self.selection.len() - tonies.len();
+        if tonies.is_empty() {
+            self.message(
+                "Custom tag",
+                "None of the selected Tonies is in tonies.json, so there is no cover, series or model number to print.",
+            );
+            return;
+        }
+        let Some(dir) = rfd::FileDialog::new().set_title("Save the PDF in").pick_folder() else {
+            return;
+        };
+        let name = match side {
+            TagSide::Cover => &self.settings.custom_tag_cover_filename,
+            TagSide::Backside => &self.settings.custom_tag_backside_filename,
+        };
+        let out_file = dir.join(name);
+        let layout = TagLayout::from_settings(&self.settings);
+        let data_dir = self.data_dir.clone();
+        let title = if side == TagSide::Cover {
+            "Creating tag covers"
+        } else {
+            "Creating tag backsides"
+        };
+        let job = self.start_job(title, tonies.len());
+        if skipped > 0 {
+            job.log(format!("Skipped {skipped} Tonie(s) that are not in tonies.json"));
+        }
+        std::thread::spawn(move || {
+            match tagpdf::create(side, &tonies, &layout, &data_dir, &out_file, &job) {
+                Ok(()) => {
+                    if let Err(e) = actions::open_with_default_program(&out_file) {
+                        job.log(format!("Cannot open the PDF viewer: {e}"));
+                    }
+                }
+                Err(e) => job.log(e),
+            }
+            job.finish();
+        });
+    }
+
+    fn log_window(&mut self, ctx: &egui::Context) {
+        if !self.settings.debug_window {
+            return;
+        }
+        let mut open = true;
+        let verbose_id = Id::unique("log_verbose");
+        let mut verbose = ctx.data(|d| d.get_temp::<bool>(verbose_id).unwrap_or(false));
+        egui::Window::new("Debug window")
+            .open(&mut open)
+            .default_pos([60.0, 120.0])
+            .default_size([700.0, 320.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut verbose, "Show debug messages");
+                    if ui.button("Copy all").clicked() {
+                        let text: String = applog::lines(applog::Level::Debug)
+                            .iter()
+                            .map(|l| format!("{} {:5} {}\n", applog::format_time(l.time), l.level.label(), l.text))
+                            .collect();
+                        ui.ctx().copy_text(text);
+                    }
+                    if ui.button("Clear").clicked() {
+                        applog::clear();
+                    }
+                });
+                ui.separator();
+                let lines = applog::lines(if verbose { applog::Level::Debug } else { applog::Level::Info });
+                let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink(false)
+                    .show_rows(ui, row_height, lines.len(), |ui, range| {
+                        for l in &lines[range] {
+                            let color = match l.level {
+                                applog::Level::Error => Color32::from_rgb(220, 80, 80),
+                                applog::Level::Warning => Color32::from_rgb(220, 170, 60),
+                                applog::Level::Debug => ui.visuals().weak_text_color(),
+                                applog::Level::Info => ui.visuals().text_color(),
+                            };
+                            ui.label(
+                                egui::RichText::new(format!("{} {:5} {}", applog::format_time(l.time), l.level.label(), l.text))
+                                    .monospace()
+                                    .color(color),
+                            );
+                        }
+                    });
+            });
+        ctx.data_mut(|d| d.insert_temp(verbose_id, verbose));
+        if !open {
+            self.settings.debug_window = false;
+            self.save_settings();
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
     }
 
     fn job_window(&mut self, ctx: &egui::Context) {
@@ -1479,6 +1667,7 @@ impl eframe::App for TeddyBenchApp {
         self.shortcuts(&ctx, &mut actions);
         self.dialogs(&ctx);
         self.job_window(&ctx);
+        self.log_window(&ctx);
 
         for a in actions {
             self.apply(a, &ctx);
@@ -1516,6 +1705,18 @@ impl TeddyBenchApp {
                     self.selection.insert(self.entries[i].file.path.clone());
                     match std::env::var("TEDDYBENCH_SCREENSHOT_DIALOG").as_deref() {
                         Ok("export") => self.apply(Action::Export(ExportFormat::Mp3), ctx),
+                        Ok("layout") => {
+                            let s = &self.settings;
+                            self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {
+                                margin: s.custom_tag_non_printable_margin,
+                                gap_x: s.custom_tag_gap_x,
+                                gap_y: s.custom_tag_gap_y,
+                                initial_column: s.custom_tag_initial_column,
+                                initial_row: s.custom_tag_initial_row,
+                                size: s.custom_tag_size,
+                                outline_width: s.custom_tag_outline_width,
+                            }));
+                        }
                         Ok("new") => {
                             let inputs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/inputs/album");
                             let files = std::fs::read_dir(inputs)

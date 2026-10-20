@@ -50,6 +50,9 @@ impl Scanner {
             .spawn(move || {
                 for (hash, url) in thumb_rx {
                     let result = load_thumbnail(&data_dir, &url, &hash, thumbnail_size);
+                    if let Err(e) = &result {
+                        crate::applog::warning(format!("Cover for {hash} from {url}: {e}"));
+                    }
                     if events.send(Event::Thumbnail(hash, result)).is_err() {
                         break;
                     }
@@ -133,6 +136,7 @@ impl<N: Fn()> ScanLoop<N> {
                 self.current = None;
                 self.auto_open = true;
                 self.files.clear();
+                crate::applog::info(format!("Directory {} is gone", dir.display()));
                 if !self.emit(Event::Lost) {
                     return;
                 }
@@ -153,6 +157,7 @@ impl<N: Fn()> ScanLoop<N> {
         self.current = Some(dir.clone());
         self.files.clear();
         self.analyzed.clear();
+        crate::applog::info(format!("Opened {}", dir.display()));
         self.emit(Event::Opened(dir));
     }
 
@@ -177,6 +182,10 @@ impl<N: Fn()> ScanLoop<N> {
                 handles.into_iter().filter_map(|h| h.join().ok()).collect()
             });
             for (f, (path, result)) in chunk.iter().zip(results) {
+                match &result {
+                    Ok(a) => crate::applog::debug(format!("{}: audio id {:08X}, hash {}", path.display(), a.audio_id, a.hash)),
+                    Err(e) => crate::applog::warning(format!("Cannot read {}: {e}", path.display())),
+                }
                 self.analyzed.insert(f.path.clone(), f.modified);
                 if !self.emit(Event::Analyzed(path, result)) {
                     return false;

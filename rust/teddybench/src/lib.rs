@@ -3,6 +3,7 @@
 //! The modules here contain everything except the user interface (see `main.rs`/`app.rs`).
 
 pub mod actions;
+pub mod applog;
 pub mod covers;
 pub mod drives;
 pub mod export;
@@ -11,6 +12,7 @@ pub mod library;
 pub mod player;
 pub mod scanner;
 pub mod settings;
+pub mod tagpdf;
 pub mod uid;
 
 /// Version shown in the title and written into exported files
@@ -30,6 +32,7 @@ pub fn load_tonies_json(data_dir: &settings::DataDir, download: bool) -> (Vec<to
             .and_then(|mut r| r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| e.to_string()))
         {
             Ok(json) if !json.is_empty() => {
+                applog::info(format!("Downloaded tonies.json ({} bytes)", json.len()));
                 std::fs::create_dir_all(&data_dir.0).ok();
                 if std::fs::write(&path, &json).is_err() {
                     status = "Writing Failed - is the tonies.json accessible?".into();
@@ -42,6 +45,7 @@ pub fn load_tonies_json(data_dir: &settings::DataDir, download: bool) -> (Vec<to
             Ok(_) => status = "Download Failed: empty response".into(),
             Err(e) => status = format!("Download Failed: {e}"),
         }
+        applog::warning(format!("tonies.json: {status}"));
     }
 
     match std::fs::read_to_string(&path) {

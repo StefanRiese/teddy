@@ -45,8 +45,14 @@ Implemented so far:
 - Export to .ogg or .mp3 (ID3 tags and cover, converted in parallel), update covers,
   export the Tonie file, copy to another SD card; all with progress and cancel
 - Drag and drop of audio files onto the window
+- Custom tags: printable A4 PDFs with round covers (full resolution covers where available) and
+  backsides with series name and model number, with an editor for the print layout
+  (*Custom tag → Print layout*, stored in the `CustomTag*` settings)
+- Debug window with the background messages (*Options → Debug window*)
+- *Help → Releases page* links to the GitHub releases
 
-Not yet: NFC readers, printing tag covers, the update check, diagnostics reports.
+Not yet: NFC readers (phase 4). Dropped on purpose: the automatic update download and diagnostics
+reports (they were sent to a server of the original project).
 
 Data files (`teddyBench.cfg`, `tonies.json`, `customTonies.json`, `cache/`) are read from the program's
 directory if a `teddyBench.cfg` is there (portable, like the C# version), otherwise from the user's data
@@ -81,6 +87,7 @@ Intentional fixes:
 - **`info -f json`** writes valid JSON (no separator before the first entry).
 - **Exit code** is non-zero when something failed; a failed encode leaves no partial file behind.
 - More input formats: MP3, Ogg Opus, FLAC and WAV.
+- The tag backside PDF is saved as `CustomTagBacksideFilename`; the C# version overwrote the cover PDF.
 
 Other differences:
 

@@ -199,6 +199,22 @@ pub fn show_in_file_manager(file: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Opens a file with the default program, e.g. a PDF viewer.
+pub fn open_with_default_program(file: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd").arg("/C").arg("start").arg("").arg(file).spawn().map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(file).spawn().map(|_| ())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open").arg(file).spawn().map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

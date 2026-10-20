@@ -40,6 +40,26 @@ pub fn load_thumbnail(data_dir: &DataDir, pic_url: &str, hash: &str, size: u32) 
     Ok(thumb)
 }
 
+/// Pixels of a printed cover: 40 mm at about 380 dpi
+pub const PRINT_SIZE: u32 = 600;
+
+/// The cover for printing tags: the full resolution cover (cached in `cache/covers`, downloaded if
+/// needed), or the list thumbnail if that fails.
+pub fn cover_for_print(data_dir: &DataDir, pic_url: &str, hash: &str) -> Result<RgbaImage, String> {
+    let cached = data_dir.cover_cache().join(format!("{hash}.{}", url_extension(pic_url)));
+    let full = std::fs::read(&cached).ok().filter(|d| !d.is_empty()).or_else(|| {
+        let data = download(pic_url).ok()?;
+        if std::fs::create_dir_all(data_dir.cover_cache()).is_ok() {
+            std::fs::write(&cached, &data).ok();
+        }
+        Some(data)
+    });
+    match full.map(|d| square_thumbnail(&d, PRINT_SIZE)) {
+        Some(Ok(img)) => Ok(img),
+        _ => load_thumbnail(data_dir, pic_url, hash, 256),
+    }
+}
+
 fn is_non_empty_file(path: &Path) -> bool {
     std::fs::metadata(path).map(|m| m.is_file() && m.len() > 0).unwrap_or(false)
 }

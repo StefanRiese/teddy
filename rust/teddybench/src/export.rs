@@ -43,7 +43,9 @@ impl JobStatus {
     }
 
     pub fn log(&self, s: impl Into<String>) {
-        self.state.lock().unwrap().log.push(s.into());
+        let s = s.into();
+        crate::applog::info(&s);
+        self.state.lock().unwrap().log.push(s);
     }
 
     pub fn finish(&self) {
