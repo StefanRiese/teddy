@@ -91,6 +91,9 @@ jobs:
           (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
         else
           cp target/release/teddy target/release/teddybench "dist/$name/"
+          # menu entry with icon, installed by install-desktop-entry.sh
+          cp packaging/linux/teddybench.desktop packaging/linux/install-desktop-entry.sh "dist/$name/"
+          cp teddybench/assets/custom.png "dist/$name/teddybench.png"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
         fi
         rm -rf "dist/$name"
@@ -130,7 +133,7 @@ jobs:
         |---|---|
         | \`teddy-rust-windows-x64.zip\` | Windows (64 bit) |
         | \`teddy-rust-macos-universal.dmg\` | macOS 11 or later, Apple Silicon and Intel |
-        | \`teddy-rust-linux-x64.tar.gz\` | Linux (x86-64, needs ALSA for playback) |
+        | \`teddy-rust-linux-x64.tar.gz\` | Linux (x86-64, needs ALSA for playback); \`./install-desktop-entry.sh\` adds it to the application menu |
 
         Each download contains TeddyBench (GUI) and \`teddy\` (command line). See the README inside.
         On macOS, drag TeddyBench.app into Applications.

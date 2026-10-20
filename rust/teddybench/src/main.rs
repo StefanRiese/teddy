@@ -15,7 +15,9 @@ fn main() -> eframe::Result {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size([1100.0, 720.0])
         .with_min_inner_size([640.0, 400.0])
-        .with_drag_and_drop(true);
+        .with_drag_and_drop(true)
+        /* matches StartupWMClass in the Linux desktop entry */
+        .with_app_id("teddybench");
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }

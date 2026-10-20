@@ -33,6 +33,9 @@ teddy -m rename [-y] [-d] <source dir> <dest dir>
 
 ## TeddyBench
 
+On Linux, `./install-desktop-entry.sh` in the unpacked archive adds TeddyBench with its icon to the
+application menu of the current user (`--uninstall` removes it again).
+
 `teddybench [directory]` opens the given CONTENT directory, a `Content` folder next to the program,
 or the first SD card with a CONTENT folder that shows up.
 

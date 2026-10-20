@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=TeddyBench
+GenericName=Toniebox SD card manager
+Comment=Manage, play and export the audio files on a Toniebox SD card
+Exec=teddybench %F
+Icon=teddybench
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=Toniebox;Tonie;SD card;
+StartupWMClass=teddybench
