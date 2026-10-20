@@ -6,7 +6,7 @@ Cross-platform port of Teddy/TeddyBench for Windows, Linux and macOS.
 |---|---|---|
 | `tonie-core` | done | Reading and writing Tonie files: header, Ogg page layout, decode, encode, `info` reports, `tonies.json` |
 | `teddy` | done | Command-line tool with the same options and output as `Teddy.exe` |
-| `teddybench` | planned | GUI (egui) |
+| `teddybench` | in progress | GUI (egui), see below |
 
 ## Build
 
@@ -15,7 +15,8 @@ cd rust
 cargo build --release
 ```
 
-libopus is compiled from source by the `opus` crate, which needs CMake and a C compiler.
+libopus and LAME are compiled from source, which needs CMake and a C compiler.
+On Linux, audio playback also needs the ALSA headers (`libasound2-dev` on Debian/Ubuntu).
 
 ## Usage
 
@@ -27,6 +28,33 @@ teddy -m rename [-y] [-d] <source dir> <dest dir>
 ```
 
 `teddy --help` lists all options. Without `-j`, `tonies.json` is downloaded from api.revvox.de.
+
+## TeddyBench
+
+`teddybench [directory]` opens the given CONTENT directory, a `Content` folder next to the program,
+or the first SD card with a CONTENT folder that shows up.
+
+Implemented so far:
+
+- Cover grid with names and covers from `tonies.json` and names from `customTonies.json`,
+  icon size slider, sorting by UID, product number, date or type
+- Details of the selected Tonie with its track list
+- Playback with seeking
+- New Tonies from audio files with track ordering, or adding an existing Tonie file
+- Rename, delete, toggle the live flag, assign a new or random UID, show in the file manager
+- Export to .ogg or .mp3 (ID3 tags and cover, converted in parallel), update covers,
+  export the Tonie file, copy to another SD card; all with progress and cancel
+- Drag and drop of audio files onto the window
+
+Not yet: NFC readers, printing tag covers, the update check, diagnostics reports.
+
+Data files (`teddyBench.cfg`, `tonies.json`, `customTonies.json`, `cache/`) are read from the program's
+directory if a `teddyBench.cfg` is there (portable, like the C# version), otherwise from the user's data
+directory (`~/.local/share/TeddyBench`, `~/Library/Application Support/TeddyBench`, `%APPDATA%\TeddyBench\data`).
+The settings file is compatible with the C# version.
+
+The live flag is the FAT hidden attribute of the Tonie file. On Linux it can only be changed on the
+SD card itself (vfat), not on a copy on another file system.
 
 ## Tests
 

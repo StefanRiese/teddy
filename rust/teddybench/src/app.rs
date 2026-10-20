@@ -1,0 +1,1546 @@
+//! The TeddyBench window.
+
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use eframe::egui::{self, Color32, ColorImage, Id, Rect, Sense, TextureHandle, TextureOptions, Vec2};
+use teddybench::export::{ExportFormat, ExportItem, ExportOptions, JobStatus};
+use teddybench::library::{Analysis, FoundFile, Kind, Resolved, TonieDb};
+use teddybench::player::{Player, TonieSource};
+use teddybench::scanner::{Command, Event, Scanner};
+use teddybench::settings::{DataDir, Settings};
+use teddybench::uid::{is_valid_uid, random_uid, UID_PREFIX};
+use teddybench::{actions, export, fsattr, VERSION};
+use tonie_core::tonies::TonieData;
+
+const MIN_ICON: u32 = 32;
+const MAX_ICON: u32 = 256;
+const HEADER_HEIGHT: f32 = 28.0;
+const LABEL_LINES: usize = 3;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortBy {
+    Uid,
+    Product,
+    Date,
+    Type,
+}
+
+impl SortBy {
+    const ALL: [SortBy; 4] = [SortBy::Uid, SortBy::Product, SortBy::Date, SortBy::Type];
+
+    fn from_setting(s: &str) -> SortBy {
+        SortBy::ALL.into_iter().find(|v| v.key() == s).unwrap_or(SortBy::Date)
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            SortBy::Uid => "UID",
+            SortBy::Product => "Product",
+            SortBy::Date => "Date",
+            SortBy::Type => "Type",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SortBy::Uid => "UID",
+            SortBy::Product => "Product Number",
+            SortBy::Date => "Date",
+            SortBy::Type => "Type",
+        }
+    }
+}
+
+struct Entry {
+    file: FoundFile,
+    analysis: Option<Result<Analysis, String>>,
+    resolved: Option<Resolved>,
+}
+
+impl Entry {
+    fn name(&self) -> String {
+        let name = self.resolved.as_ref().map(|r| r.name.clone()).unwrap_or_else(|| self.file.label.clone());
+        if self.file.live {
+            format!("[live] {name}")
+        } else {
+            name
+        }
+    }
+
+    fn kind(&self) -> Kind {
+        self.resolved.as_ref().map(|r| r.kind).unwrap_or(Kind::Unknown)
+    }
+
+    fn info(&self) -> Option<&TonieData> {
+        self.resolved.as_ref().and_then(|r| r.info.as_ref())
+    }
+
+    fn analysis(&self) -> Option<&Analysis> {
+        self.analysis.as_ref().and_then(|a| a.as_ref().ok())
+    }
+
+    fn date(&self) -> Option<SystemTime> {
+        self.file.created.or(self.file.modified)
+    }
+
+    /// Key of the texture to show
+    fn image_key(&self) -> String {
+        match (self.kind(), self.analysis()) {
+            (Kind::Retail, Some(a)) => a.hash.clone(),
+            (Kind::Custom, _) => "custom".into(),
+            _ => "unknown".into(),
+        }
+    }
+
+    fn export_item(&self) -> ExportItem {
+        ExportItem {
+            path: self.file.path.clone(),
+            uid: self.file.uid.clone(),
+            info: self.info().cloned(),
+        }
+    }
+}
+
+/// Creating a new Tonie from audio files, or copying a Tonie file
+struct NewTonie {
+    files: Vec<PathBuf>,
+    descriptions: Vec<String>,
+    selected: Option<usize>,
+    uid: String,
+    custom_audio_id: bool,
+    audio_id: String,
+    /// A single existing Tonie file that is copied instead of encoded
+    copy_tonie_file: bool,
+}
+
+struct ExportDialog {
+    items: Vec<ExportItem>,
+    format: ExportFormat,
+    create_dirs: bool,
+    out_dir: String,
+}
+
+enum Dialog {
+    NewTonie(NewTonie),
+    AssignUid { path: PathBuf, uid: String },
+    Rename { hash: String, name: String },
+    ConfirmDelete(Vec<PathBuf>),
+    Export(ExportDialog),
+    Message { title: String, text: String },
+    About,
+}
+
+struct RunningJob {
+    title: String,
+    status: Arc<JobStatus>,
+    total: usize,
+}
+
+/// Things the user asked for while the UI was drawn; applied afterwards.
+enum Action {
+    OpenDirectory,
+    Add(Vec<PathBuf>),
+    Play,
+    Stop,
+    Seek(f64),
+    ToggleLive,
+    Rename,
+    Delete,
+    AssignUid,
+    RandomUid,
+    ShowInFolder,
+    Export(ExportFormat),
+    ExportTonieFile,
+    CopyToSd,
+    DownloadJson,
+    SelectAll,
+}
+
+pub struct TeddyBenchApp {
+    data_dir: DataDir,
+    settings: Settings,
+    db: TonieDb,
+    json_status: String,
+    json_rx: Option<Receiver<(Vec<TonieData>, String)>>,
+    scanner: Scanner,
+    current_dir: Option<PathBuf>,
+    entries: Vec<Entry>,
+    textures: HashMap<String, TextureHandle>,
+    thumbs_requested: HashSet<String>,
+    selection: BTreeSet<PathBuf>,
+    /// Anchor for shift-click range selection
+    anchor: Option<PathBuf>,
+    sort: SortBy,
+    dialog: Option<Dialog>,
+    job: Option<RunningJob>,
+    player: Option<Player>,
+    playing: Option<PathBuf>,
+    loading_rx: Option<Receiver<Result<TonieSource, String>>>,
+    /// Position while the user drags the slider
+    seek_drag: Option<f64>,
+    title: String,
+    /// Development aid (debug builds): save a screenshot to this file once the window settled, then quit
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    screenshot: Option<(PathBuf, std::time::Instant)>,
+}
+
+fn texture_from(ctx: &egui::Context, name: &str, img: &image::RgbaImage) -> TextureHandle {
+    let color = ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+    ctx.load_texture(name, color, TextureOptions::LINEAR)
+}
+
+fn format_time(d: Duration) -> String {
+    let s = d.as_secs();
+    format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+}
+
+fn format_date(t: Option<SystemTime>) -> String {
+    t.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| tonie_core::info::format_unix_time(d.as_secs() as i64).replace('T', " "))
+        .unwrap_or_default()
+}
+
+fn default_export_dir() -> PathBuf {
+    directories::UserDirs::new()
+        .and_then(|u| u.audio_dir().or(Some(u.home_dir())).map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TeddyBench Export")
+}
+
+impl TeddyBenchApp {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> TeddyBenchApp {
+        let data_dir = DataDir::locate();
+        std::fs::create_dir_all(&data_dir.0).ok();
+        let settings = Settings::load(&data_dir.settings());
+        let custom_names = TonieDb::load_custom_names(&data_dir.custom_tonies_json());
+
+        /* a directory given on the command line, or a Content folder next to the program, like the original */
+        let start_dir = std::env::args_os().nth(1).map(PathBuf::from).or_else(|| {
+            let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+            Some(exe_dir.join("Content")).filter(|d| d.is_dir())
+        });
+
+        let ctx = cc.egui_ctx.clone();
+        let scanner = Scanner::start(
+            data_dir.clone(),
+            settings.cache_image_size.clamp(MIN_ICON, 1024),
+            start_dir.is_none(),
+            move || ctx.request_repaint(),
+        );
+        if let Some(dir) = start_dir {
+            scanner.send(Command::Open(dir));
+        }
+
+        let mut textures = HashMap::new();
+        for (key, bytes) in [
+            ("unknown", &include_bytes!("../assets/unknown.png")[..]),
+            ("custom", &include_bytes!("../assets/custom.png")[..]),
+        ] {
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let img = img.resize_exact(256, 256, image::imageops::FilterType::Lanczos3).to_rgba8();
+                textures.insert(key.to_string(), texture_from(&cc.egui_ctx, key, &img));
+            }
+        }
+
+        let mut app = TeddyBenchApp {
+            data_dir,
+            settings,
+            db: TonieDb {
+                tonies: Vec::new(),
+                custom_names,
+            },
+            json_status: "Loading tonies.json...".into(),
+            json_rx: None,
+            scanner,
+            current_dir: None,
+            entries: Vec::new(),
+            textures,
+            thumbs_requested: HashSet::new(),
+            selection: BTreeSet::new(),
+            anchor: None,
+            sort: SortBy::Date,
+            dialog: None,
+            job: None,
+            player: None,
+            playing: None,
+            loading_rx: None,
+            seek_drag: None,
+            title: String::new(),
+            screenshot: std::env::var_os("TEDDYBENCH_SCREENSHOT").map(|p| (PathBuf::from(p), std::time::Instant::now())),
+        };
+        app.sort = SortBy::from_setting(&app.settings.sort_by);
+        app.load_json(app.settings.download_json, &cc.egui_ctx);
+        app
+    }
+
+    fn save_settings(&self) {
+        self.settings.save(&self.data_dir.settings()).ok();
+    }
+
+    fn message(&mut self, title: &str, text: impl Into<String>) {
+        self.dialog = Some(Dialog::Message {
+            title: title.into(),
+            text: text.into(),
+        });
+    }
+
+    fn load_json(&mut self, download: bool, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        let data_dir = self.data_dir.clone();
+        let ctx = ctx.clone();
+        self.json_status = if download { "Downloading...".into() } else { "Loading...".into() };
+        std::thread::spawn(move || {
+            tx.send(teddybench::load_tonies_json(&data_dir, download)).ok();
+            ctx.request_repaint();
+        });
+        self.json_rx = Some(rx);
+    }
+
+    // ---- background events ----
+
+    fn process_events(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.json_rx {
+            if let Ok((tonies, status)) = rx.try_recv() {
+                self.db.tonies = tonies;
+                self.json_status = status;
+                self.json_rx = None;
+                self.resolve_all();
+            }
+        }
+
+        while let Ok(event) = self.scanner.events.try_recv() {
+            match event {
+                Event::Opened(dir) => {
+                    self.current_dir = Some(dir);
+                    self.entries.clear();
+                    self.selection.clear();
+                }
+                Event::Lost => {
+                    self.current_dir = None;
+                    self.entries.clear();
+                    self.selection.clear();
+                    self.stop_playback();
+                }
+                Event::Files(files) => {
+                    let mut old: HashMap<PathBuf, Entry> = self.entries.drain(..).map(|e| (e.file.path.clone(), e)).collect();
+                    self.entries = files
+                        .into_iter()
+                        .map(|file| match old.remove(&file.path) {
+                            Some(mut e) => {
+                                e.file = file;
+                                e
+                            }
+                            None => Entry {
+                                file,
+                                analysis: None,
+                                resolved: None,
+                            },
+                        })
+                        .collect();
+                    let paths: HashSet<&PathBuf> = self.entries.iter().map(|e| &e.file.path).collect();
+                    self.selection.retain(|p| paths.contains(p));
+                }
+                Event::Analyzed(path, result) => {
+                    if let Some(i) = self.entries.iter().position(|e| e.file.path == path) {
+                        self.entries[i].analysis = Some(result);
+                        self.resolve(i);
+                    }
+                }
+                Event::Thumbnail(hash, result) => {
+                    if let Ok(img) = result {
+                        let tex = texture_from(ctx, &hash, &img);
+                        self.textures.insert(hash, tex);
+                    }
+                }
+            }
+        }
+
+        if let Some(rx) = &self.loading_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.loading_rx = None;
+                match result {
+                    Ok(source) => match self.player.as_mut() {
+                        Some(p) => p.play(source),
+                        None => self.playing = None,
+                    },
+                    Err(e) => {
+                        self.playing = None;
+                        self.message("Play file", format!("Failed to play file: {e}"));
+                    }
+                }
+            }
+        }
+        if self.loading_rx.is_none() && self.playing.is_some() && !self.player.as_ref().map(|p| p.is_playing()).unwrap_or(false) {
+            self.playing = None;
+        }
+
+        if let Some(job) = &self.job {
+            if job.status.text().done && job.status.cancelled() {
+                self.job = None;
+                self.scanner.send(Command::Rescan);
+            }
+        }
+    }
+
+    fn resolve(&mut self, i: usize) {
+        let entry = &mut self.entries[i];
+        let Some(analysis) = entry.analysis.as_ref().and_then(|a| a.as_ref().ok()) else {
+            return;
+        };
+        let resolved = self.db.resolve(&entry.file.uid, analysis);
+        if let (Kind::Retail, Some(pic)) = (resolved.kind, resolved.info.as_ref().and_then(|i| i.pic.clone()).filter(|p| !p.is_empty())) {
+            if self.thumbs_requested.insert(analysis.hash.clone()) {
+                self.scanner.send(Command::Thumbnail(analysis.hash.clone(), pic));
+            }
+        }
+        entry.resolved = Some(resolved);
+    }
+
+    fn resolve_all(&mut self) {
+        for i in 0..self.entries.len() {
+            self.resolve(i);
+        }
+    }
+
+    // ---- selection ----
+
+    fn sorted_indices(&self) -> Vec<usize> {
+        let mut idx: Vec<usize> = (0..self.entries.len()).collect();
+        let e = &self.entries;
+        match self.sort {
+            SortBy::Uid => idx.sort_by(|&a, &b| e[a].file.uid.cmp(&e[b].file.uid)),
+            SortBy::Product => idx.sort_by(|&a, &b| {
+                let m = |i: usize| e[i].info().and_then(|t| t.model.clone());
+                m(a).cmp(&m(b)).then(e[a].file.uid.cmp(&e[b].file.uid))
+            }),
+            SortBy::Date => idx.sort_by(|&a, &b| e[a].date().cmp(&e[b].date()).then(e[a].file.uid.cmp(&e[b].file.uid))),
+            SortBy::Type => idx.sort_by(|&a, &b| {
+                let k = |i: usize| (e[i].kind(), e[i].info().map(|t| t.sort_string()), e[i].name());
+                k(a).cmp(&k(b))
+            }),
+        }
+        idx
+    }
+
+    fn selected_entries(&self) -> Vec<&Entry> {
+        self.entries.iter().filter(|e| self.selection.contains(&e.file.path)).collect()
+    }
+
+    fn single_selected(&self) -> Option<&Entry> {
+        let sel = self.selected_entries();
+        (sel.len() == 1).then(|| sel[0])
+    }
+
+    fn click(&mut self, path: &Path, modifiers: egui::Modifiers, order: &[usize]) {
+        if modifiers.shift {
+            if let Some(anchor) = &self.anchor {
+                let pos = |p: &Path| order.iter().position(|&i| self.entries[i].file.path == p);
+                if let (Some(a), Some(b)) = (pos(anchor), pos(path)) {
+                    let (a, b) = (a.min(b), a.max(b));
+                    if !modifiers.command {
+                        self.selection.clear();
+                    }
+                    for &i in &order[a..=b] {
+                        self.selection.insert(self.entries[i].file.path.clone());
+                    }
+                    return;
+                }
+            }
+        }
+        if modifiers.command {
+            if !self.selection.remove(path) {
+                self.selection.insert(path.to_path_buf());
+            }
+        } else {
+            self.selection.clear();
+            self.selection.insert(path.to_path_buf());
+        }
+        self.anchor = Some(path.to_path_buf());
+    }
+
+    // ---- actions ----
+
+    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+        match action {
+            Action::OpenDirectory => {
+                if let Some(dir) = rfd::FileDialog::new().set_title("Open the CONTENT directory of the SD card").pick_folder() {
+                    self.scanner.send(Command::Open(dir));
+                }
+            }
+            Action::Add(files) => self.start_new_tonie(files),
+            Action::Play => self.play_selected(ctx),
+            Action::Stop => self.stop_playback(),
+            Action::Seek(secs) => {
+                if let Some(p) = &self.player {
+                    p.seek(Duration::from_secs_f64(secs));
+                }
+            }
+            Action::ToggleLive => {
+                let files: Vec<PathBuf> = self.selected_entries().iter().map(|e| e.file.path.clone()).collect();
+                /* with several Tonies selected, the live flag is removed from all of them */
+                let unset_all = files.len() > 1;
+                let mut errors = Vec::new();
+                for f in &files {
+                    let live = !unset_all && !fsattr::is_live(f).unwrap_or(false);
+                    if let Err(e) = fsattr::set_live(f, live) {
+                        errors.push(format!("{}: {e}", f.display()));
+                    }
+                }
+                if !errors.is_empty() {
+                    self.message("Toggle live flag", errors.join("\n"));
+                }
+                self.scanner.send(Command::Rescan);
+            }
+            Action::Rename => {
+                if let Some(e) = self.single_selected() {
+                    match e.analysis() {
+                        Some(a) => {
+                            let name = e.resolved.as_ref().map(|r| r.name.clone()).unwrap_or_default();
+                            self.dialog = Some(Dialog::Rename { hash: a.hash.clone(), name });
+                        }
+                        None => self.message("Rename", "The file has not been read yet."),
+                    }
+                }
+            }
+            Action::Delete => {
+                let files: Vec<PathBuf> = self.selection.iter().cloned().collect();
+                if !files.is_empty() {
+                    self.dialog = Some(Dialog::ConfirmDelete(files));
+                }
+            }
+            Action::AssignUid => {
+                if let Some(e) = self.single_selected() {
+                    self.dialog = Some(Dialog::AssignUid {
+                        path: e.file.path.clone(),
+                        uid: e.file.uid.clone(),
+                    });
+                }
+            }
+            Action::RandomUid => {
+                if let (Some(e), Some(dir)) = (self.single_selected(), self.current_dir.clone()) {
+                    let path = e.file.path.clone();
+                    self.assign_uid(&path, &random_uid(), &dir);
+                }
+            }
+            Action::ShowInFolder => {
+                if let Some(e) = self.single_selected() {
+                    if let Err(err) = actions::show_in_file_manager(&e.file.path) {
+                        self.message("Show in file manager", err.to_string());
+                    }
+                }
+            }
+            Action::Export(format) => {
+                let items: Vec<ExportItem> = self.selected_entries().iter().map(|e| e.export_item()).collect();
+                if !items.is_empty() {
+                    let out_dir = self
+                        .settings
+                        .extra
+                        .get("ExportDirectory")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| default_export_dir().display().to_string());
+                    self.dialog = Some(Dialog::Export(ExportDialog {
+                        items,
+                        format,
+                        create_dirs: true,
+                        out_dir,
+                    }));
+                }
+            }
+            Action::ExportTonieFile => {
+                let items: Vec<(ExportItem, u32)> = self
+                    .selected_entries()
+                    .iter()
+                    .filter_map(|e| e.analysis().map(|a| (e.export_item(), a.audio_id)))
+                    .collect();
+                if items.is_empty() {
+                    return;
+                }
+                if let Some(dir) = rfd::FileDialog::new().set_title("Export Tonie files to").pick_folder() {
+                    let errors: Vec<String> = items
+                        .iter()
+                        .filter_map(|(item, id)| export::export_tonie_file(item, *id, &dir).err().map(|e| e.to_string()))
+                        .collect();
+                    self.message("Export Tonie file", if errors.is_empty() { "Finished".to_string() } else { errors.join("\n") });
+                }
+            }
+            Action::CopyToSd => {
+                let files: Vec<PathBuf> = self.selection.iter().cloned().collect();
+                if files.is_empty() {
+                    return;
+                }
+                if let Some(dir) = rfd::FileDialog::new()
+                    .set_title("Copy to MicroSD: choose the CONTENT directory of the target card")
+                    .pick_folder()
+                {
+                    let job = self.start_job("Copy to MicroSD", files.len());
+                    std::thread::spawn(move || export::copy_to_sd(&files, &dir, &job));
+                }
+            }
+            Action::DownloadJson => self.load_json(true, ctx),
+            Action::SelectAll => self.selection = self.entries.iter().map(|e| e.file.path.clone()).collect(),
+        }
+    }
+
+    fn start_job(&mut self, title: &str, total: usize) -> Arc<JobStatus> {
+        let status = Arc::new(JobStatus::default());
+        self.job = Some(RunningJob {
+            title: title.into(),
+            status: status.clone(),
+            total,
+        });
+        status
+    }
+
+    fn start_new_tonie(&mut self, files: Vec<PathBuf>) {
+        if self.current_dir.is_none() {
+            self.message("Add", "Please open the CONTENT directory of the SD card first.");
+            return;
+        }
+        if files.is_empty() {
+            return;
+        }
+        let audio: Vec<PathBuf> = files.iter().filter(|f| tonie_core::audio_in::is_supported(f)).cloned().collect();
+        let copy_tonie_file = files.len() == 1 && audio.is_empty();
+        if !copy_tonie_file && audio.len() != files.len() {
+            self.message(
+                "Add",
+                format!("Please select audio files only ({}).", tonie_core::audio_in::SUPPORTED_EXTENSIONS.join(", ")),
+            );
+            return;
+        }
+        let files = if copy_tonie_file { files } else { actions::initial_track_order(audio) };
+        let descriptions = files
+            .iter()
+            .map(|f| if copy_tonie_file { String::new() } else { actions::id3_description(f) })
+            .collect();
+        self.dialog = Some(Dialog::NewTonie(NewTonie {
+            files,
+            descriptions,
+            selected: None,
+            uid: UID_PREFIX.into(),
+            custom_audio_id: false,
+            audio_id: String::new(),
+            copy_tonie_file,
+        }));
+    }
+
+    fn play_selected(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.single_selected().map(|e| e.file.path.clone()) else {
+            return;
+        };
+        if self.player.is_none() {
+            match Player::new() {
+                Ok(p) => self.player = Some(p),
+                Err(e) => {
+                    self.message("Play file", format!("No audio output available: {e}"));
+                    return;
+                }
+            }
+        }
+        self.stop_playback();
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        let p = path.clone();
+        std::thread::spawn(move || {
+            tx.send(TonieSource::open(&p)).ok();
+            ctx.request_repaint();
+        });
+        self.loading_rx = Some(rx);
+        self.playing = Some(path);
+    }
+
+    fn stop_playback(&mut self) {
+        if let Some(p) = self.player.as_mut() {
+            p.stop();
+        }
+        self.playing = None;
+        self.loading_rx = None;
+    }
+
+    fn assign_uid(&mut self, path: &Path, uid: &str, content_dir: &Path) {
+        match actions::reassign_uid(path, uid, content_dir) {
+            Ok(Some(note)) => self.message("Successfully re-assigned UID", format!("Success. {note}")),
+            Ok(None) => {}
+            Err(e) => self.message("Re-assigning UID failed", e),
+        }
+        self.selection.clear();
+        self.scanner.send(Command::Rescan);
+    }
+
+    // ---- drawing ----
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Open directory...").clicked() {
+                    actions.push(Action::OpenDirectory);
+                }
+                ui.separator();
+                if ui.button("Exit").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+            ui.menu_button("Options", |ui| {
+                if ui.checkbox(&mut self.settings.download_json, "Download tonies.json on startup").changed() {
+                    self.save_settings();
+                }
+                if ui.button("Download tonies.json now").clicked() {
+                    actions.push(Action::DownloadJson);
+                }
+                ui.separator();
+                ui.label(format!("Data directory: {}", self.data_dir.0.display()));
+            });
+            ui.menu_button("Help", |ui| {
+                if ui.button("About").clicked() {
+                    self.dialog = Some(Dialog::About);
+                }
+            });
+        });
+    }
+
+    fn toolbar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        ui.horizontal(|ui| {
+            ui.label("Sort by");
+            egui::ComboBox::from_id_salt("sort").selected_text(self.sort.label()).show_ui(ui, |ui| {
+                for s in SortBy::ALL {
+                    if ui.selectable_value(&mut self.sort, s, s.label()).changed() {
+                        self.settings.sort_by = s.key().into();
+                        self.save_settings();
+                    }
+                }
+            });
+            ui.separator();
+
+            let busy = self.loading_rx.is_some();
+            if self.playing.is_some() {
+                if ui.button(if busy { "Loading..." } else { "Stop" }).clicked() {
+                    actions.push(Action::Stop);
+                }
+            } else if ui.add_enabled(self.single_selected().is_some(), egui::Button::new("Play file")).clicked() {
+                actions.push(Action::Play);
+            }
+
+            let (pos, len) = self
+                .player
+                .as_ref()
+                .filter(|_| self.playing.is_some() && !busy)
+                .map(|p| (p.position(), p.duration()))
+                .unwrap_or_default();
+            let mut value = self.seek_drag.unwrap_or(pos.as_secs_f64());
+            let slider = ui.add_enabled(
+                len > Duration::ZERO,
+                egui::Slider::new(&mut value, 0.0..=len.as_secs_f64().max(1.0)).show_value(false),
+            );
+            if slider.dragged() {
+                self.seek_drag = Some(value);
+            }
+            if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
+                actions.push(Action::Seek(value));
+                self.seek_drag = None;
+            }
+            ui.label(if len > Duration::ZERO {
+                format!("{}/{}", format_time(Duration::from_secs_f64(value)), format_time(len))
+            } else {
+                "--:--:--/--:--:--".into()
+            });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("{} px", self.settings.icon_size));
+                let r = ui.add(
+                    egui::Slider::new(&mut self.settings.icon_size, MIN_ICON..=MAX_ICON)
+                        .show_value(false)
+                        .step_by(8.0),
+                );
+                if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                    self.save_settings();
+                }
+                ui.label("Icons");
+            });
+        });
+    }
+
+    fn side_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let has_dir = self.current_dir.is_some();
+        let any = !self.selection.is_empty();
+        ui.add_space(4.0);
+        let full = |ui: &mut egui::Ui, enabled: bool, text: &str| {
+            ui.add_enabled(enabled, egui::Button::new(text).min_size(Vec2::new(ui.available_width(), 0.0)))
+                .clicked()
+        };
+        if full(ui, has_dir, "Add...") {
+            if let Some(files) = rfd::FileDialog::new()
+                .set_title("Audio files for a new Tonie, or one Tonie file")
+                .add_filter("Audio files", tonie_core::audio_in::SUPPORTED_EXTENSIONS)
+                .add_filter("All files", &["*"])
+                .pick_files()
+            {
+                actions.push(Action::Add(files));
+            }
+        }
+        if full(ui, any, "Delete...") {
+            actions.push(Action::Delete);
+        }
+        ui.separator();
+        if full(ui, any, "Save as .ogg...") {
+            actions.push(Action::Export(ExportFormat::Ogg));
+        }
+        if full(ui, any, "Save as .mp3...") {
+            actions.push(Action::Export(ExportFormat::Mp3));
+        }
+        if full(ui, any, "Copy to MicroSD...") {
+            actions.push(Action::CopyToSd);
+        }
+        ui.separator();
+
+        if let Some(e) = self.single_selected() {
+            details(ui, e);
+        } else if any {
+            ui.label(format!("{} Tonies selected", self.selection.len()));
+        }
+    }
+
+    fn grid(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let order = self.sorted_indices();
+        let icon = self.settings.icon_size as f32;
+        let tile = Vec2::new((icon + 24.0).max(110.0), icon + 16.0 + LABEL_LINES as f32 * 15.0);
+        let spacing = 6.0;
+        let width = ui.available_width();
+        let cols = (((width + spacing) / (tile.x + spacing)).floor() as usize).max(1);
+
+        /* rows of tiles, with a header per type when sorting by type */
+        enum Row {
+            Header(&'static str),
+            Tiles(Vec<usize>),
+        }
+        let mut rows = Vec::new();
+        let groups: Vec<(Option<&'static str>, Vec<usize>)> = if self.sort == SortBy::Type {
+            [(Kind::Unknown, "Unknown"), (Kind::Custom, "Custom"), (Kind::Retail, "Retail")]
+                .into_iter()
+                .map(|(k, name)| (Some(name), order.iter().copied().filter(|&i| self.entries[i].kind() == k).collect::<Vec<_>>()))
+                .filter(|(_, v)| !v.is_empty())
+                .collect()
+        } else {
+            vec![(None, order.clone())]
+        };
+        for (header, items) in groups {
+            if let Some(h) = header {
+                rows.push(Row::Header(h));
+            }
+            rows.extend(items.chunks(cols).map(|c| Row::Tiles(c.to_vec())));
+        }
+        let row_height = |r: &Row| if matches!(r, Row::Header(_)) { HEADER_HEIGHT } else { tile.y + spacing };
+        let total: f32 = rows.iter().map(row_height).sum();
+
+        let mut clicked: Option<(PathBuf, egui::Modifiers)> = None;
+        egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
+            ui.set_height(total);
+            ui.set_width(width);
+            let origin = ui.min_rect().min;
+            let mut y = 0.0;
+            for row in &rows {
+                let h = row_height(row);
+                if y + h >= viewport.min.y && y <= viewport.max.y {
+                    match row {
+                        Row::Header(text) => {
+                            let rect = Rect::from_min_size(origin + Vec2::new(0.0, y), Vec2::new(width, HEADER_HEIGHT));
+                            ui.painter().text(
+                                rect.left_center() + Vec2::new(4.0, 0.0),
+                                egui::Align2::LEFT_CENTER,
+                                *text,
+                                egui::FontId::proportional(16.0),
+                                ui.visuals().strong_text_color(),
+                            );
+                        }
+                        Row::Tiles(items) => {
+                            for (col, &i) in items.iter().enumerate() {
+                                let rect = Rect::from_min_size(origin + Vec2::new(col as f32 * (tile.x + spacing), y), tile);
+                                if let Some(m) = self.tile(ui, i, rect, icon, actions) {
+                                    clicked = Some((self.entries[i].file.path.clone(), m));
+                                }
+                            }
+                        }
+                    }
+                }
+                y += h;
+            }
+        });
+
+        if let Some((path, modifiers)) = clicked {
+            self.click(&path, modifiers, &order);
+        }
+    }
+
+    /// Draws one tile. Returns the modifiers if it was clicked.
+    fn tile(&mut self, ui: &mut egui::Ui, i: usize, rect: Rect, icon: f32, actions: &mut Vec<Action>) -> Option<egui::Modifiers> {
+        let entry = &self.entries[i];
+        let path = entry.file.path.clone();
+        let selected = self.selection.contains(&path);
+        let response = ui.interact(rect, Id::unique(("tile", &path)), Sense::click());
+        let visuals = ui.visuals();
+
+        if selected {
+            ui.painter().rect_filled(rect, 4.0, visuals.selection.bg_fill);
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, 4.0, visuals.widgets.hovered.weak_bg_fill);
+        }
+
+        let img_rect = Rect::from_min_size(rect.min + Vec2::new((rect.width() - icon) / 2.0, 6.0), Vec2::splat(icon));
+        let key = entry.image_key();
+        if let Some(tex) = self.textures.get(&key).or_else(|| self.textures.get("unknown")) {
+            ui.painter().image(
+                tex.id(),
+                img_rect,
+                Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+
+        let text_color = if selected { visuals.selection.stroke.color } else { visuals.text_color() };
+        let mut job = egui::text::LayoutJob::simple(entry.name(), egui::FontId::proportional(12.0), text_color, rect.width() - 8.0);
+        job.wrap.max_rows = LABEL_LINES;
+        job.halign = egui::Align::Center;
+        let galley = ui.painter().layout_job(job);
+        ui.painter().galley(egui::pos2(rect.center().x, img_rect.max.y + 4.0), galley, text_color);
+
+        let response = response.on_hover_ui(|ui| tooltip(ui, entry));
+        let mut result = None;
+        if response.clicked() {
+            result = Some(ui.input(|i| i.modifiers));
+        }
+        if response.double_clicked() {
+            self.selection = BTreeSet::from([path.clone()]);
+            actions.push(Action::AssignUid);
+        }
+        if response.secondary_clicked() && !selected {
+            self.selection = BTreeSet::from([path.clone()]);
+            self.anchor = Some(path);
+        }
+        response.context_menu(|ui| {
+            let single = self.selection.len() == 1;
+            let mut item = |ui: &mut egui::Ui, enabled: bool, text: &str, action: fn() -> Action| {
+                if ui.add_enabled(enabled, egui::Button::new(text)).clicked() {
+                    actions.push(action());
+                    ui.close();
+                }
+            };
+            item(ui, single, "Play", || Action::Play);
+            item(ui, true, "Toggle live flag", || Action::ToggleLive);
+            item(ui, single, "Rename", || Action::Rename);
+            item(ui, true, "Delete", || Action::Delete);
+            ui.separator();
+            item(ui, single, "Assign new UID", || Action::AssignUid);
+            item(ui, single, "Assign random UID", || Action::RandomUid);
+            item(ui, single, "Show in file manager", || Action::ShowInFolder);
+            ui.separator();
+            item(ui, true, "Export to .ogg", || Action::Export(ExportFormat::Ogg));
+            item(ui, true, "Export to .mp3", || Action::Export(ExportFormat::Mp3));
+            item(ui, true, "Export Tonie file...", || Action::ExportTonieFile);
+            item(ui, true, "Copy to MicroSD", || Action::CopyToSd);
+        });
+        result
+    }
+
+    fn status_bar(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let mut text = if self.db.tonies.is_empty() {
+                "No tonies.json loaded, consider downloading it".to_string()
+            } else {
+                format!("Have {} entries in tonies.json", self.db.tonies.len())
+            };
+            if !self.json_status.is_empty() {
+                text += &format!(" | {}", self.json_status);
+            }
+            ui.label(text);
+            if let Some(dir) = &self.current_dir {
+                ui.separator();
+                ui.label(format!("{} Tonies in {}", self.entries.len(), dir.display()));
+            }
+        });
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.dialog.take() else { return };
+        let keep;
+
+        match &mut dialog {
+            Dialog::Message { title, text } => {
+                let r = egui::Modal::new(Id::unique("message")).show(ctx, |ui| {
+                    ui.set_max_width(500.0);
+                    ui.heading(title.as_str());
+                    ui.label(text.as_str());
+                    ui.add_space(8.0);
+                    ui.button("OK").clicked()
+                });
+                keep = !(r.inner || r.should_close());
+            }
+            Dialog::About => {
+                let r = egui::Modal::new(Id::unique("about")).show(ctx, |ui| {
+                    ui.set_max_width(480.0);
+                    ui.heading(format!("TeddyBench {VERSION}"));
+                    ui.label("Manage the audio files on a Toniebox SD card.");
+                    ui.hyperlink_to("github.com/StefanRiese/teddy", "https://github.com/StefanRiese/teddy");
+                    ui.add_space(8.0);
+                    ui.label(
+                        "This tool is in no way endorsed by the creator of the Tonie Boxes. Its purpose is solely meant for understanding the file \
+                         exchange format and only to be used for interoperability for personal use.",
+                    );
+                    ui.add_space(8.0);
+                    ui.button("Close").clicked()
+                });
+                keep = !(r.inner || r.should_close());
+            }
+            Dialog::Rename { hash, name } => {
+                let r = egui::Modal::new(Id::unique("rename")).show(ctx, |ui| {
+                    ui.heading("Rename");
+                    let edit = ui.text_edit_singleline(name);
+                    edit.request_focus();
+                    ui.horizontal(|ui| {
+                        (
+                            ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)),
+                            ui.button("Cancel").clicked(),
+                        )
+                    })
+                    .inner
+                });
+                let (ok, cancel) = r.inner;
+                if ok {
+                    self.db.custom_names.insert(hash.clone(), name.trim().to_string());
+                    self.db.save_custom_names(&self.data_dir.custom_tonies_json()).ok();
+                    self.resolve_all();
+                }
+                keep = !(ok || cancel || r.should_close());
+            }
+            Dialog::ConfirmDelete(files) => {
+                let names: Vec<String> = files
+                    .iter()
+                    .map(|f| {
+                        self.entries
+                            .iter()
+                            .find(|e| &e.file.path == f)
+                            .map(|e| e.name())
+                            .unwrap_or_else(|| f.display().to_string())
+                    })
+                    .collect();
+                let r = egui::Modal::new(Id::unique("delete")).show(ctx, |ui| {
+                    ui.heading(if files.len() == 1 { "Delete file?" } else { "Delete files?" });
+                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                        for n in &names {
+                            ui.label(n.replace('\n', " "));
+                        }
+                    });
+                    ui.horizontal(|ui| (ui.button("Delete").clicked(), ui.button("Cancel").clicked())).inner
+                });
+                let (ok, cancel) = r.inner;
+                if ok {
+                    self.stop_playback();
+                    let dir = self.current_dir.clone().unwrap_or_default();
+                    let errors: Vec<String> = files.iter().filter_map(|f| actions::delete_tonie(f, &dir).err()).collect();
+                    self.selection.clear();
+                    self.scanner.send(Command::Rescan);
+                    if !errors.is_empty() {
+                        self.dialog = Some(Dialog::Message {
+                            title: "Delete".into(),
+                            text: errors.join("\n"),
+                        });
+                        return;
+                    }
+                }
+                keep = !(ok || cancel || r.should_close());
+            }
+            Dialog::AssignUid { path, uid } => {
+                let r = egui::Modal::new(Id::unique("assign")).show(ctx, |ui| {
+                    ui.heading("Assign new UID");
+                    let ok = uid_field(ui, uid);
+                    ui.horizontal(|ui| (ui.add_enabled(ok, egui::Button::new("OK")).clicked(), ui.button("Cancel").clicked()))
+                        .inner
+                });
+                let (ok, cancel) = r.inner;
+                if ok {
+                    let (path, uid) = (path.clone(), uid.to_ascii_uppercase());
+                    if let Some(dir) = self.current_dir.clone() {
+                        self.assign_uid(&path, &uid, &dir);
+                    }
+                    if self.dialog.is_some() {
+                        return;
+                    }
+                }
+                keep = !(ok || cancel || r.should_close());
+            }
+            Dialog::NewTonie(nt) => {
+                let r = egui::Modal::new(Id::unique("new_tonie")).show(ctx, |ui| new_tonie_ui(ui, nt));
+                match r.inner {
+                    Some(true) => {
+                        keep = false;
+                        self.run_new_tonie(std::mem::replace(
+                            nt,
+                            NewTonie {
+                                files: Vec::new(),
+                                descriptions: Vec::new(),
+                                selected: None,
+                                uid: String::new(),
+                                custom_audio_id: false,
+                                audio_id: String::new(),
+                                copy_tonie_file: false,
+                            },
+                        ));
+                        if self.dialog.is_some() {
+                            return;
+                        }
+                    }
+                    Some(false) => keep = false,
+                    None => keep = !r.should_close(),
+                }
+            }
+            Dialog::Export(ed) => {
+                let r = egui::Modal::new(Id::unique("export")).show(ctx, |ui| export_ui(ui, ed));
+                match r.inner {
+                    Some(ExportChoice::Cancel) => keep = false,
+                    Some(choice) => {
+                        keep = false;
+                        let covers_only = matches!(choice, ExportChoice::CoversOnly);
+                        let out_dir = PathBuf::from(&ed.out_dir);
+                        self.settings
+                            .extra
+                            .insert("ExportDirectory".into(), serde_json::Value::String(ed.out_dir.clone()));
+                        self.save_settings();
+                        if let Err(e) = std::fs::create_dir_all(&out_dir) {
+                            self.message("Export", format!("Cannot create '{}': {e}", out_dir.display()));
+                            return;
+                        }
+                        let items = std::mem::take(&mut ed.items);
+                        let data_dir = self.data_dir.clone();
+                        let create_dirs = ed.create_dirs;
+                        if covers_only {
+                            let job = self.start_job("Updating covers", items.len());
+                            std::thread::spawn(move || export::update_covers(&items, &out_dir, create_dirs, &data_dir, &job));
+                        } else {
+                            let format = ed.format;
+                            let title = if format == ExportFormat::Ogg {
+                                "Exporting to .ogg"
+                            } else {
+                                "Exporting to .mp3"
+                            };
+                            let job = self.start_job(title, items.len());
+                            let options = ExportOptions {
+                                format,
+                                out_dir,
+                                create_dirs,
+                                version: VERSION.into(),
+                            };
+                            std::thread::spawn(move || export::export(&items, &options, &data_dir, &job));
+                        }
+                    }
+                    None => keep = !r.should_close(),
+                }
+            }
+        }
+
+        if keep {
+            self.dialog = Some(dialog);
+        }
+    }
+
+    fn run_new_tonie(&mut self, nt: NewTonie) {
+        let Some(dir) = self.current_dir.clone() else { return };
+        let uid = nt.uid.to_ascii_uppercase();
+        if nt.copy_tonie_file {
+            match actions::copy_tonie(&nt.files[0], &uid, &dir) {
+                Ok(_) => self.scanner.send(Command::Rescan),
+                Err(e) => self.message("Add file...", e),
+            }
+            return;
+        }
+        let audio_id = if nt.custom_audio_id {
+            u32::from_str_radix(nt.audio_id.trim().trim_start_matches("0x"), 16).unwrap_or(0)
+        } else {
+            let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
+            now.wrapping_sub(0x5000_0000)
+        };
+        let job = self.start_job("Encoding", nt.files.len());
+        std::thread::spawn(move || {
+            match actions::encode_tonie(&nt.files, &uid, audio_id, &dir, &job) {
+                Ok(path) => job.log(format!("Written content to {}", path.display())),
+                Err(e) => job.log(e),
+            }
+            job.finish();
+        });
+    }
+
+    fn job_window(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.job else { return };
+        let text = job.status.text();
+        let finished = job.status.finished_items.load(Ordering::Relaxed);
+        let total = job.total.max(1);
+        let mut close = false;
+
+        egui::Modal::new(Id::unique("job")).show(ctx, |ui| {
+            ui.set_width(520.0);
+            ui.heading(&job.title);
+            ui.label(&text.current);
+            ui.label(egui::RichText::new(&text.detail).weak());
+            ui.add(egui::ProgressBar::new(finished as f32 / total as f32).text(format!("{finished} / {}", job.total)));
+            egui::ScrollArea::vertical().max_height(200.0).stick_to_bottom(true).show(ui, |ui| {
+                for line in &text.log {
+                    ui.monospace(line);
+                }
+            });
+            ui.add_space(6.0);
+            if text.done {
+                ui.label(if job.status.cancelled() { "Cancelled." } else { "Finished." });
+                close = ui.button("Close").clicked();
+            } else if job.status.cancelled() {
+                ui.label("Cancelling...");
+            } else if ui.button("Cancel").clicked() {
+                job.status.cancel.store(true, Ordering::Relaxed);
+            }
+        });
+
+        if close {
+            self.job = None;
+            self.scanner.send(Command::Rescan);
+        }
+    }
+
+    fn shortcuts(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        if self.dialog.is_some() || self.job.is_some() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        ctx.input(|i| {
+            if i.modifiers.command && i.key_pressed(egui::Key::A) {
+                actions.push(Action::SelectAll);
+            }
+            if i.key_pressed(egui::Key::F2) {
+                actions.push(Action::Rename);
+            }
+            if i.key_pressed(egui::Key::Delete) {
+                actions.push(Action::Delete);
+            }
+        });
+
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            actions.push(Action::Add(dropped));
+        }
+    }
+}
+
+/// Text field for a tag UID with validation. Returns whether the UID is valid.
+fn uid_field(ui: &mut egui::Ui, uid: &mut String) -> bool {
+    if !uid.to_ascii_uppercase().starts_with(UID_PREFIX) {
+        *uid = UID_PREFIX.into();
+    }
+    let valid = is_valid_uid(uid);
+    ui.horizontal(|ui| {
+        ui.label("Tag UID:");
+        let color = if valid {
+            Color32::from_rgb(40, 140, 60)
+        } else {
+            Color32::from_rgb(190, 60, 80)
+        };
+        ui.add(
+            egui::TextEdit::singleline(uid)
+                .desired_width(170.0)
+                .font(egui::TextStyle::Monospace)
+                .text_color(color)
+                .char_limit(16),
+        );
+        if ui.button("Random").on_hover_text("A UID that does not belong to a real tag").clicked() {
+            *uid = random_uid();
+        }
+    });
+    ui.label(egui::RichText::new("16 hex digits starting with E00403, as printed by NFC readers").weak());
+    valid
+}
+
+/// Returns Some(true) to start, Some(false) to cancel.
+fn new_tonie_ui(ui: &mut egui::Ui, nt: &mut NewTonie) -> Option<bool> {
+    ui.set_width(640.0);
+    ui.heading(if nt.copy_tonie_file { "Add Tonie file" } else { "New Tonie" });
+    let uid_ok = uid_field(ui, &mut nt.uid);
+
+    if nt.copy_tonie_file {
+        ui.label(format!("Copy {}", nt.files[0].display()));
+    } else {
+        ui.add_space(6.0);
+        ui.label("Track order:");
+        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            egui::Grid::new("tracks").striped(true).num_columns(3).show(ui, |ui| {
+                for (i, f) in nt.files.iter().enumerate() {
+                    let name = f.file_name().unwrap_or_default().to_string_lossy();
+                    if ui.selectable_label(nt.selected == Some(i), format!("{:>2}", i + 1)).clicked() {
+                        nt.selected = Some(i);
+                    }
+                    if ui.selectable_label(nt.selected == Some(i), name.as_ref()).clicked() {
+                        nt.selected = Some(i);
+                    }
+                    ui.label(&nt.descriptions[i]);
+                    ui.end_row();
+                }
+            });
+        });
+        ui.horizontal(|ui| {
+            let sel = nt.selected;
+            if ui.add_enabled(sel.map(|s| s > 0).unwrap_or(false), egui::Button::new("Up")).clicked() {
+                let s = sel.unwrap();
+                nt.files.swap(s, s - 1);
+                nt.descriptions.swap(s, s - 1);
+                nt.selected = Some(s - 1);
+            }
+            if ui
+                .add_enabled(sel.map(|s| s + 1 < nt.files.len()).unwrap_or(false), egui::Button::new("Down"))
+                .clicked()
+            {
+                let s = sel.unwrap();
+                nt.files.swap(s, s + 1);
+                nt.descriptions.swap(s, s + 1);
+                nt.selected = Some(s + 1);
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut nt.custom_audio_id, "Set a specific Audio-ID (hex)");
+            ui.add_enabled(
+                nt.custom_audio_id,
+                egui::TextEdit::singleline(&mut nt.audio_id)
+                    .desired_width(90.0)
+                    .char_limit(8)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+    }
+    let id_ok = !nt.custom_audio_id || (!nt.audio_id.is_empty() && u32::from_str_radix(nt.audio_id.trim(), 16).is_ok());
+
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(uid_ok && id_ok, egui::Button::new(if nt.copy_tonie_file { "Copy" } else { "Encode" }))
+            .clicked()
+        {
+            return Some(true);
+        }
+        if ui.button("Cancel").clicked() {
+            return Some(false);
+        }
+        None
+    })
+    .inner
+}
+
+enum ExportChoice {
+    Export,
+    CoversOnly,
+    Cancel,
+}
+
+fn export_ui(ui: &mut egui::Ui, ed: &mut ExportDialog) -> Option<ExportChoice> {
+    ui.set_width(560.0);
+    ui.heading(format!("Export {} Tonie(s)", ed.items.len()));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut ed.format, ExportFormat::Ogg, ".ogg");
+        ui.radio_value(&mut ed.format, ExportFormat::Mp3, ".mp3 (with tags and cover)");
+    });
+    ui.checkbox(&mut ed.create_dirs, "Create a directory per Tonie");
+    ui.horizontal(|ui| {
+        ui.label("Folder:");
+        ui.add(egui::TextEdit::singleline(&mut ed.out_dir).desired_width(380.0));
+        if ui.button("Choose...").clicked() {
+            if let Some(d) = rfd::FileDialog::new().set_directory(&ed.out_dir).pick_folder() {
+                ed.out_dir = d.display().to_string();
+            }
+        }
+    });
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(
+            "Please do not share exported files: they could contain information which can be used to identify your tonie. \
+             Also be aware that sharing these files is most likely illegal in your country.",
+        )
+        .weak(),
+    );
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        let ok = !ed.out_dir.trim().is_empty();
+        if ui.add_enabled(ok, egui::Button::new("Export")).clicked() {
+            return Some(ExportChoice::Export);
+        }
+        if ui
+            .add_enabled(ok, egui::Button::new("Update covers only"))
+            .on_hover_text("Download the covers again into folders that were already exported")
+            .clicked()
+        {
+            return Some(ExportChoice::CoversOnly);
+        }
+        if ui.button("Cancel").clicked() {
+            return Some(ExportChoice::Cancel);
+        }
+        None
+    })
+    .inner
+}
+
+fn tooltip(ui: &mut egui::Ui, e: &Entry) {
+    ui.monospace(format!("File:     {}", e.file.path.display()));
+    ui.monospace(format!(
+        "Name:     {}",
+        e.resolved.as_ref().map(|r| r.name.replace('\n', " ")).unwrap_or_default()
+    ));
+    ui.monospace(format!("UID:      {}", e.file.uid));
+    ui.monospace(format!("Date:     {}", format_date(e.date())));
+    if let Some(a) = e.analysis() {
+        ui.monospace(format!("AudioID:  0x{:08X}", a.audio_id));
+        ui.monospace(format!("Chapters: {}", a.chapters.len()));
+    }
+}
+
+fn details(ui: &mut egui::Ui, e: &Entry) {
+    ui.label(egui::RichText::new(e.name().replace('\n', " ")).strong());
+    egui::Grid::new("details").num_columns(2).show(ui, |ui| {
+        let mut row = |k: &str, v: String| {
+            ui.label(egui::RichText::new(k).weak());
+            ui.label(v);
+            ui.end_row();
+        };
+        row("UID", e.file.uid.clone());
+        row("Date", format_date(e.date()));
+        row("Live", if e.file.live { "yes".into() } else { "no".into() });
+        match &e.analysis {
+            Some(Ok(a)) => {
+                row("Audio ID", format!("0x{:08X}", a.audio_id));
+                row("Length", format_time(Duration::from_secs_f64(a.duration_secs())));
+                row("Tracks", a.chapters.len().to_string());
+                row("Hash", format!("{}…", &a.hash[..a.hash.len().min(12)]));
+            }
+            Some(Err(err)) => row("Error", err.clone()),
+            None => row("", "reading...".into()),
+        }
+    });
+    if let Some(info) = e.info() {
+        if !info.tracks.is_empty() {
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().id_salt("tracks").show(ui, |ui| {
+                for (i, t) in info.tracks.iter().enumerate() {
+                    ui.label(format!("{:>2}. {t}", i + 1));
+                }
+            });
+        }
+    }
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(e.file.path.display().to_string()).weak().small());
+}
+
+impl eframe::App for TeddyBenchApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.process_events(&ctx);
+        let mut actions = Vec::new();
+
+        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui, &mut actions));
+        egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui, &mut actions));
+        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+
+        if self.current_dir.is_some() {
+            egui::Panel::right("actions")
+                .default_size(240.0)
+                .size_range(180.0..=420.0)
+                .show(ui, |ui| self.side_panel(ui, &mut actions));
+        }
+
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            if self.current_dir.is_some() {
+                self.grid(ui, &mut actions);
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(ui.available_height() / 3.0);
+                        ui.heading("Please insert your box' SD card");
+                        ui.label("or open the CONTENT directory of a card or a copy of it.");
+                        ui.add_space(8.0);
+                        if ui.button("Open directory...").clicked() {
+                            actions.push(Action::OpenDirectory);
+                        }
+                    });
+                });
+            }
+        });
+
+        self.shortcuts(&ctx, &mut actions);
+        self.dialogs(&ctx);
+        self.job_window(&ctx);
+
+        for a in actions {
+            self.apply(a, &ctx);
+        }
+
+        let title = match &self.current_dir {
+            Some(d) => format!("TeddyBench - {VERSION} - {}", d.display()),
+            None => format!("TeddyBench - {VERSION}"),
+        };
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
+
+        if self.playing.is_some() || self.job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+        #[cfg(debug_assertions)]
+        self.screenshot_hook(&ctx);
+    }
+}
+
+#[cfg(debug_assertions)]
+impl TeddyBenchApp {
+    /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|new` opens a dialog.
+    fn screenshot_hook(&mut self, ctx: &egui::Context) {
+        let Some((path, started)) = self.screenshot.clone() else { return };
+        ctx.request_repaint_after(Duration::from_millis(100));
+        let elapsed = started.elapsed();
+
+        if elapsed > Duration::from_millis(2500) && self.selection.is_empty() {
+            if let Some(n) = std::env::var("TEDDYBENCH_SCREENSHOT_SELECT").ok().and_then(|n| n.parse::<usize>().ok()) {
+                if let Some(&i) = self.sorted_indices().get(n) {
+                    self.selection.insert(self.entries[i].file.path.clone());
+                    match std::env::var("TEDDYBENCH_SCREENSHOT_DIALOG").as_deref() {
+                        Ok("export") => self.apply(Action::Export(ExportFormat::Mp3), ctx),
+                        Ok("new") => {
+                            let inputs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/inputs/album");
+                            let files = std::fs::read_dir(inputs)
+                                .map(|d| d.filter_map(|e| e.ok().map(|e| e.path())).collect())
+                                .unwrap_or_default();
+                            self.start_new_tonie(files);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if elapsed > Duration::from_secs(3) && !ctx.data(|d| d.get_temp::<bool>(Id::unique("screenshot_requested")).unwrap_or(false)) {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("screenshot_requested"), true));
+            let c = ctx.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+                let [w, h] = image.size;
+                let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                if let Some(img) = image::RgbaImage::from_raw(w as u32, h as u32, rgba) {
+                    img.save(&path).ok();
+                }
+                c.send_viewport_cmd(egui::ViewportCommand::Close);
+                c.request_repaint();
+            })));
+        }
+    }
+}

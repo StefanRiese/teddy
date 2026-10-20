@@ -35,6 +35,10 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
 
+    - name: Install Linux build dependencies
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
     - name: Cache
       uses: Swatinem/rust-cache@v2
       with:
@@ -53,11 +57,13 @@ jobs:
     - name: Build release
       run: cargo build --release
 
-    - name: Upload teddy
+    - name: Upload binaries
       uses: actions/upload-artifact@v7
       with:
         name: teddy-${{ runner.os }}-${{ runner.arch }}
         path: |
           rust/target/release/teddy
           rust/target/release/teddy.exe
+          rust/target/release/teddybench
+          rust/target/release/teddybench.exe
         if-no-files-found: error

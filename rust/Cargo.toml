@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tonie-core", "teddy"]
+members = ["tonie-core", "teddy", "teddybench"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,3 +10,10 @@ repository = "https://github.com/StefanRiese/teddy"
 
 [profile.release]
 lto = "thin"
+
+# keep target/ small: no debug info for dependencies, line tables only for our crates
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

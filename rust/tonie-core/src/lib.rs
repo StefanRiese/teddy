@@ -4,6 +4,7 @@
 //! stream (48 kHz stereo, 20 ms frames) whose pages are aligned to 4 KiB blocks.
 
 pub mod audio_in;
+pub mod decode;
 pub mod encode;
 pub mod file;
 pub mod header;

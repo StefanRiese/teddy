@@ -1,0 +1,29 @@
+[package]
+name = "teddybench"
+description = "Manage the audio files on a Toniebox SD card"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+directories = "6.0.0"
+eframe = "0.37.0"
+id3 = "1.17.2"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+libc = "0.2"
+mp3lame-encoder = "0.2.5"
+opus = "0.4.0"
+rfd = "0.17.2"
+rodio = "0.23.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tonie-core = { path = "../tonie-core" }
+ureq = "3.4.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }

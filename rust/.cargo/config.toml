@@ -1,0 +1,3 @@
+[build]
+# incremental caches grow large quickly
+incremental = false
