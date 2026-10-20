@@ -14,4 +14,14 @@ fn main() {
     println!("cargo:rustc-env=TEDDY_VERSION={version}-{branch}+{commit}{}", if dirty { ",dirty" } else { "" });
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/index");
+
+    /* icon and version information for teddy.exe */
+    println!("cargo:rerun-if-changed=../teddybench/assets/teddybench.ico");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("../teddybench/assets/teddybench.ico");
+        res.set("ProductName", "Teddy");
+        res.set("FileDescription", "Teddy - Tonie file tool");
+        res.compile().expect("embedding the Windows resources");
+    }
 }
