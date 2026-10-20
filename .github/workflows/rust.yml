@@ -3,6 +3,8 @@ name: Rust port
 on:
   push:
     branches: [ "*" ]
+    # rust-v1.2.3 publishes a release (paths are not checked for tags)
+    tags: [ "rust-v*" ]
     paths:
       - "rust/**"
       - ".github/workflows/rust.yml"
@@ -12,6 +14,9 @@ on:
       - "rust/**"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
 
@@ -57,13 +62,62 @@ jobs:
     - name: Build release
       run: cargo build --release
 
-    - name: Upload binaries
+    # archives keep the executable bit, which artifacts would lose
+    - name: Package
+      shell: bash
+      run: |
+        name="teddy-rust-$(echo '${{ runner.os }}' | tr '[:upper:]' '[:lower:]')-$(echo '${{ runner.arch }}' | tr '[:upper:]' '[:lower:]')"
+        mkdir -p "dist/$name"
+        cp README.md teddy/LICENSES.txt "dist/$name/"
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          cp target/release/teddy.exe target/release/teddybench.exe "dist/$name/"
+          (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
+        else
+          cp target/release/teddy target/release/teddybench "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+        fi
+        rm -rf "dist/$name"
+        ls -la dist
+
+    - name: Upload package
       uses: actions/upload-artifact@v7
       with:
-        name: teddy-${{ runner.os }}-${{ runner.arch }}
-        path: |
-          rust/target/release/teddy
-          rust/target/release/teddy.exe
-          rust/target/release/teddybench
-          rust/target/release/teddybench.exe
+        name: teddy-rust-${{ runner.os }}-${{ runner.arch }}
+        path: rust/dist/*
         if-no-files-found: error
+
+  release:
+
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/rust-v')
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download packages
+      uses: actions/download-artifact@v7
+      with:
+        path: dist
+        pattern: teddy-rust-*
+        merge-multiple: true
+
+    # pre-release and never "latest": the C# TeddyBench update check offers the latest release
+    - name: Publish release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        cat > notes.md <<NOTES
+        Cross-platform port of Teddy and TeddyBench (Rust), built from \`${GITHUB_SHA::7}\`.
+
+        | File | Platform |
+        |---|---|
+        | \`teddy-rust-windows-x64.zip\` | Windows (64 bit) |
+        | \`teddy-rust-macos-arm64.tar.gz\` | macOS (Apple Silicon) |
+        | \`teddy-rust-linux-x64.tar.gz\` | Linux (x86-64, needs ALSA for playback) |
+
+        Each archive contains \`teddybench\` (GUI) and \`teddy\` (command line). See the README in the archive.
+
+        - The macOS binaries are not signed: right-click → Open the first time, or run \`xattr -d com.apple.quarantine teddybench teddy\`.
+        - NFC readers are not supported yet. The C# TeddyBench (v1.x releases) stays available.
+        NOTES
+        gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --title "TeddyBench ${TAG#rust-v} (Rust port, preview)" --notes-file notes.md --prerelease --latest=false --verify-tag
