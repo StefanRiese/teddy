@@ -1,0 +1,60 @@
+
+Teddy (Rust port) - licenses and disclaimer
+============================================
+
+Contains 3-Clause BSD license for 'TonieFile' / Teddy
+
+   Copyright (c) 2020 g3gg0.de
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+   - Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+   - Neither the name of Internet Society, IETF or IETF Trust, nor the
+   names of specific contributors, may be used to endorse or promote
+   products derived from this software without specific prior written
+   permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+   OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Third-party components (see each project for the full license text):
+
+   libopus (via the 'opus' crate)   BSD-3-Clause  https://opus-codec.org/license/
+   symphonia                        MPL-2.0       https://github.com/pdeljanov/Symphonia
+   rubato                           MIT           https://github.com/HEnquist/rubato
+   ogg                              BSD-3-Clause  https://github.com/RustAudio/ogg
+   id3                              MIT           https://github.com/polyfloyd/rust-id3
+   clap, serde, ureq, sha1, ...     MIT/Apache-2.0
+
+-------------
+ Disclaimer:
+-------------
+   This tool is in no way endorsed with the creator of the Tonie Boxes.
+   They did not support this tool nor was there any other exchange of information.
+
+   The author distances herewith explicit from any use of this tool for piracy or
+   alike and takes no responsibility if someone else uses this tool for these goals.
+   Its purpose is solely meant for understanding the file exchange format, technology
+   and only to be used for the goal of interoperability for personal use.
+
+   All information required for building this tool was gained by reading the files
+   stored on SD card for legally acquired tonies. No decryption or authentication was
+   overridden.
+

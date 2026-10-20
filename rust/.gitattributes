@@ -1,0 +1,2 @@
+# reference output is compared byte by byte, never convert line endings
+tests/fixtures/** -text

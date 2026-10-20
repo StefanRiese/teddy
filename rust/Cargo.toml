@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["tonie-core", "teddy"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+repository = "https://github.com/StefanRiese/teddy"
+
+[profile.release]
+lto = "thin"

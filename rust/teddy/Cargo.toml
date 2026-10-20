@@ -1,0 +1,20 @@
+[package]
+name = "teddy"
+description = "Command-line tool to inspect, decode and encode Toniebox audio files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+tempfile = "3.27.0"
+tonie-core = { path = "../tonie-core" }
+ureq = "3.4.2"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+tempfile = "3.27.0"
