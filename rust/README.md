@@ -58,7 +58,9 @@ reports (they were sent to a server of the original project).
 
 Data files (`teddyBench.cfg`, `tonies.json`, `customTonies.json`, `cache/`) are read from the program's
 directory if a `teddyBench.cfg` is there (portable, like the C# version), otherwise from the user's data
-directory (`~/.local/share/TeddyBench`, `~/Library/Application Support/TeddyBench`, `%APPDATA%\TeddyBench\data`).
+directory: `%APPDATA%\TeddyBench\data` on Windows, `~/Library/Application Support/TeddyBench` on macOS,
+`~/.local/share/teddybench` on Linux. To keep everything next to the program, put a `teddyBench.cfg`
+(e.g. containing `{}`) there. *Options* shows the directory in use.
 The settings file is compatible with the C# version.
 
 The live flag is the FAT hidden attribute of the Tonie file. On Linux it can only be changed on the
