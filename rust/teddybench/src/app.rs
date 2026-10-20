@@ -241,10 +241,7 @@ impl TeddyBenchApp {
             .skip(1)
             .find(|a| !a.to_string_lossy().starts_with("-psn"))
             .map(PathBuf::from)
-            .or_else(|| {
-                let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-                Some(exe_dir.join("Content")).filter(|d| d.is_dir())
-            });
+            .or_else(|| Some(teddybench::settings::install_dir()?.join("Content")).filter(|d| d.is_dir()));
 
         let ctx = cc.egui_ctx.clone();
         let scanner = Scanner::start(
@@ -740,7 +737,17 @@ impl TeddyBenchApp {
                     self.save_settings();
                 }
                 ui.separator();
-                ui.label(format!("Data directory: {}", self.data_dir.0.display()));
+                let kind = if self.data_dir.is_portable() {
+                    "portable"
+                } else {
+                    "program directory is read-only"
+                };
+                ui.label(format!("Data directory ({kind}): {}", self.data_dir.0.display()));
+                if ui.button("Open data directory").clicked() {
+                    if let Err(e) = actions::open_with_default_program(&self.data_dir.0) {
+                        applog::warning(format!("Cannot open {}: {e}", self.data_dir.0.display()));
+                    }
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("Releases page").on_hover_text(RELEASES_URL).clicked() {

@@ -56,12 +56,15 @@ Implemented so far:
 Not yet: NFC readers (phase 4). Dropped on purpose: the automatic update download and diagnostics
 reports (they were sent to a server of the original project).
 
-Data files (`teddyBench.cfg`, `tonies.json`, `customTonies.json`, `cache/`) are read from the program's
-directory if a `teddyBench.cfg` is there (portable, like the C# version), otherwise from the user's data
-directory: `%APPDATA%\TeddyBench\data` on Windows, `~/Library/Application Support/TeddyBench` on macOS,
-`~/.local/share/teddybench` on Linux. To keep everything next to the program, put a `teddyBench.cfg`
-(e.g. containing `{}`) there. *Options* shows the directory in use.
-The settings file is compatible with the C# version.
+Data files (`teddyBench.cfg`, `tonies.json`, `customTonies.json`, `cache/`) are kept next to the program
+(portable, like the C# version); in the macOS app inside `TeddyBench.app/Contents/Data`. If that location
+is read-only (e.g. `Program Files`, or macOS running a downloaded app before it was moved to Applications),
+the user's data directory is used instead: `%APPDATA%\TeddyBench\data` on Windows,
+`~/Library/Application Support/TeddyBench` on macOS, `~/.local/share/teddybench` on Linux.
+*Options* shows the directory in use. The settings file is compatible with the C# version.
+
+Note for macOS: replacing TeddyBench.app with a new version also replaces `Contents/Data`. Copy
+`customTonies.json` and `teddyBench.cfg` over to keep custom names and settings.
 
 The live flag is the FAT hidden attribute of the Tonie file. On Linux it can only be changed on the
 SD card itself (vfat), not on a copy on another file system.

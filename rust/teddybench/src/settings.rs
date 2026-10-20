@@ -78,22 +78,99 @@ impl Settings {
 #[derive(Clone, Debug)]
 pub struct DataDir(pub PathBuf);
 
+/// Files that hold user data and are carried over to the portable directory
+const USER_FILES: &[&str] = &[SETTINGS_FILE, "customTonies.json"];
+
+/// `TeddyBench.app` if the executable runs from a macOS app bundle
+fn app_bundle(exe: &Path) -> Option<PathBuf> {
+    /* <dir>/TeddyBench.app/Contents/MacOS/teddybench */
+    let dir = exe.parent()?;
+    let bundle = dir.parent()?.parent()?;
+    (dir.ends_with("Contents/MacOS") && bundle.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))).then(|| bundle.to_path_buf())
+}
+
+/// Where the program is installed: the directory of the executable, or the one containing
+/// `TeddyBench.app`. A `Content` folder there is opened on startup.
+pub fn install_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    match app_bundle(&exe) {
+        Some(bundle) => bundle.parent().map(Path::to_path_buf),
+        None => exe.parent().map(Path::to_path_buf),
+    }
+}
+
+/// The portable data directory: next to the executable, or inside the app bundle
+/// (`TeddyBench.app/Contents/Data`) on macOS.
+pub fn program_dir() -> Option<PathBuf> {
+    program_dir_for(&std::env::current_exe().ok()?)
+}
+
+fn program_dir_for(exe: &Path) -> Option<PathBuf> {
+    match app_bundle(exe) {
+        Some(bundle) => Some(bundle.join("Contents").join("Data")),
+        None => exe.parent().map(Path::to_path_buf),
+    }
+}
+
+/// The platform's data directory, used when the program directory is read-only.
+pub fn user_data_dir() -> PathBuf {
+    match directories::ProjectDirs::from("", "", "TeddyBench") {
+        Some(dirs) => dirs.data_dir().to_path_buf(),
+        None => PathBuf::from("."),
+    }
+}
+
+fn is_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".teddybench-write-test-{}", std::process::id()));
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(_) => {
+            std::fs::remove_file(&probe).ok();
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Copies settings and custom names that are only in `from`, e.g. when switching to the portable layout.
+fn carry_over(from: &Path, to: &Path) {
+    for name in USER_FILES {
+        let (src, dest) = (from.join(name), to.join(name));
+        if src.is_file() && !dest.exists() {
+            std::fs::copy(src, dest).ok();
+        }
+    }
+}
+
 impl DataDir {
-    /// `TEDDYBENCH_DATA_DIR` if set; the program's directory if it already holds a teddyBench.cfg
-    /// (portable installation, like the C# version); otherwise the platform's data directory.
+    /// Portable by default: the program directory, or `Contents/Data` in the macOS app bundle (see
+    /// [`program_dir`]), so everything stays together like with the C# version. If that is not
+    /// writable (e.g. Program Files, or macOS running a downloaded app from a read-only location),
+    /// the platform's data directory.
+    /// `TEDDYBENCH_DATA_DIR` overrides both.
     pub fn locate() -> DataDir {
         if let Some(dir) = std::env::var_os("TEDDYBENCH_DATA_DIR") {
             return DataDir(PathBuf::from(dir));
         }
-        if let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
-            if exe_dir.join(SETTINGS_FILE).is_file() {
-                return DataDir(exe_dir);
+        Self::choose(program_dir(), user_data_dir())
+    }
+
+    fn choose(program_dir: Option<PathBuf>, user_dir: PathBuf) -> DataDir {
+        /* the data directory inside an app bundle does not exist on the first start */
+        if let Some(dir) = program_dir.as_ref().filter(|d| !d.exists() && d.ends_with("Contents/Data")) {
+            std::fs::create_dir_all(dir).ok();
+        }
+        match program_dir {
+            Some(dir) if is_writable(&dir) => {
+                carry_over(&user_dir, &dir);
+                DataDir(dir)
             }
+            _ => DataDir(user_dir),
         }
-        match directories::ProjectDirs::from("", "", "TeddyBench") {
-            Some(dirs) => DataDir(dirs.data_dir().to_path_buf()),
-            None => DataDir(PathBuf::from(".")),
-        }
+    }
+
+    /// Whether the data lives next to the program
+    pub fn is_portable(&self) -> bool {
+        program_dir().is_some_and(|p| p == self.0)
     }
 
     pub fn settings(&self) -> PathBuf {
@@ -122,6 +199,53 @@ impl DataDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_dir_of_executables_and_app_bundles() {
+        assert_eq!(program_dir_for(Path::new("/opt/teddy/teddybench")), Some(PathBuf::from("/opt/teddy")));
+        assert_eq!(
+            program_dir_for(Path::new("/Applications/TeddyBench.app/Contents/MacOS/teddybench")),
+            Some(PathBuf::from("/Applications/TeddyBench.app/Contents/Data"))
+        );
+        /* not a bundle, just a directory called MacOS */
+        assert_eq!(
+            program_dir_for(Path::new("/x/Contents/MacOS/teddybench")),
+            Some(PathBuf::from("/x/Contents/MacOS"))
+        );
+    }
+
+    #[test]
+    fn portable_directory_with_carried_over_settings() {
+        let program = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join(SETTINGS_FILE), "{\"IconSize\": 64}").unwrap();
+        std::fs::write(user.path().join("customTonies.json"), "{}").unwrap();
+
+        let dir = DataDir::choose(Some(program.path().to_path_buf()), user.path().to_path_buf());
+        assert_eq!(dir.0, program.path());
+        assert_eq!(Settings::load(&dir.settings()).icon_size, 64);
+        assert!(dir.custom_tonies_json().is_file());
+        /* nothing left behind from the write test */
+        assert_eq!(std::fs::read_dir(program.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn creates_the_data_directory_in_an_app_bundle() {
+        let apps = tempfile::tempdir().unwrap();
+        let data = apps.path().join("TeddyBench.app").join("Contents").join("Data");
+        std::fs::create_dir_all(data.parent().unwrap().join("MacOS")).unwrap();
+        let user = tempfile::tempdir().unwrap();
+        assert_eq!(DataDir::choose(Some(data.clone()), user.path().to_path_buf()).0, data);
+        assert!(data.is_dir());
+    }
+
+    #[test]
+    fn falls_back_to_the_user_directory() {
+        let user = tempfile::tempdir().unwrap();
+        let missing = user.path().join("does-not-exist");
+        assert_eq!(DataDir::choose(Some(missing), user.path().to_path_buf()).0, user.path());
+        assert_eq!(DataDir::choose(None, user.path().to_path_buf()).0, user.path());
+    }
 
     #[test]
     fn reads_the_csharp_format_and_keeps_unknown_fields() {
