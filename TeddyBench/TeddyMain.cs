@@ -55,6 +55,9 @@ namespace TeddyBench
         private ConcurrentDictionary<string, Tuple<TonieAudio, DateTime>> CachedAudios = new ConcurrentDictionary<string, Tuple<TonieAudio, DateTime>>();
         private readonly object ImageCacheLock = new object();
         private readonly HashSet<string> ImageCacheKeys = new HashSet<string>();
+        /* source images of all ImageList entries, so the list can be rebuilt when the icon display size changes. UI thread only. */
+        private readonly Dictionary<string, Image> IconSources = new Dictionary<string, Image>();
+        private System.Windows.Forms.Timer IconSizeTimer;
         private ListViewItem LastSelectediItem = null;
         private RfidReaderBase RfidReader;
         private bool AutoSelected;
@@ -303,11 +306,13 @@ namespace TeddyBench
 
             Settings = Settings.FromFile("teddyBench.cfg");
 
-            lstTonies.LargeImageList = new ImageList();
-            lstTonies.LargeImageList.ImageSize = new Size(128, 128);
-            lstTonies.LargeImageList.ColorDepth = ColorDepth.Depth32Bit;
-            lstTonies.LargeImageList.Images.Add("unknown", ResizeImage(Resources.unknown, 128, 128));
-            lstTonies.LargeImageList.Images.Add("custom", ResizeImage(Resources.custom, 128, 128));
+            IconSources["unknown"] = ResizeImage(Resources.unknown, 256, 256);
+            IconSources["custom"] = ResizeImage(Resources.custom, 256, 256);
+            /* rebuilding the ImageList is not free, so only apply the slider value once it stopped moving for a moment */
+            IconSizeTimer = new System.Windows.Forms.Timer();
+            IconSizeTimer.Interval = 150;
+            IconSizeTimer.Tick += (object sender, EventArgs e) => { IconSizeTimer.Stop(); SetIconSize(trackIconSize.Value); };
+            SetIconSize(Settings.IconSize);
             lstTonies.ListViewItemSorter = new ListViewItemComparer(2);
             lstTonies.DoubleBuffered(true);
             cmbSorting.SelectedIndex = 2;
@@ -350,6 +355,35 @@ namespace TeddyBench
         void SaveSettings()
         {
             Settings.Save("teddyBench.cfg");
+        }
+
+        /// <summary>
+        /// Changes only the size the icons are displayed with in the list view. The cached images
+        /// themselves are not touched; the ImageList is rebuilt from the stored source images.
+        /// </summary>
+        private void SetIconSize(int size)
+        {
+            size = Math.Max(trackIconSize.Minimum, Math.Min(trackIconSize.Maximum, size));
+
+            ImageList oldList = lstTonies.LargeImageList;
+            ImageList newList = new ImageList();
+            newList.ImageSize = new Size(size, size);
+            newList.ColorDepth = ColorDepth.Depth32Bit;
+            foreach (var entry in IconSources)
+            {
+                newList.Images.Add(entry.Key, entry.Value);
+            }
+            lstTonies.LargeImageList = newList;
+            oldList?.Dispose();
+
+            trackIconSize.Value = size;
+            lblIconSize.Text = size + " px";
+
+            if (Settings.IconSize != size)
+            {
+                Settings.IconSize = size;
+                SaveSettings();
+            }
         }
 
 
@@ -1007,8 +1041,9 @@ namespace TeddyBench
                                             {
                                                 this.BeginInvoke(new Action(() =>
                                                 {
-                                                    if (!lstTonies.LargeImageList.Images.ContainsKey(hash))
+                                                    if (!IconSources.ContainsKey(hash))
                                                     {
+                                                        IconSources[hash] = img;
                                                         lstTonies.LargeImageList.Images.Add(hash, img);
                                                     }
                                                 }));
@@ -4004,6 +4039,17 @@ namespace TeddyBench
 
             // start a viewer.
             Process.Start(filename);
+        }
+
+        private void trackIconSize_ValueChanged(object sender, EventArgs e)
+        {
+            lblIconSize.Text = trackIconSize.Value + " px";
+            if (IconSizeTimer == null || trackIconSize.Value == lstTonies.LargeImageList?.ImageSize.Width)
+            {
+                return;
+            }
+            IconSizeTimer.Stop();
+            IconSizeTimer.Start();
         }
 
         private void downloadToniesjsonOnStartupToolStripMenuItem_Click(object sender, EventArgs e)

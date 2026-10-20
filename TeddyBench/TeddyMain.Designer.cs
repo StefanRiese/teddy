@@ -67,6 +67,8 @@
             this.splitContainer2 = new System.Windows.Forms.SplitContainer();
             this.lblPlayTime = new System.Windows.Forms.Label();
             this.trackPlayPosition = new System.Windows.Forms.TrackBar();
+            this.lblIconSize = new System.Windows.Forms.Label();
+            this.trackIconSize = new System.Windows.Forms.TrackBar();
             this.label1 = new System.Windows.Forms.Label();
             this.btnPlay = new System.Windows.Forms.Button();
             this.cmbSorting = new System.Windows.Forms.ComboBox();
@@ -107,6 +109,7 @@
             this.splitContainer2.Panel2.SuspendLayout();
             this.splitContainer2.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.trackPlayPosition)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.trackIconSize)).BeginInit();
             this.statusStrip1.SuspendLayout();
             this.TonieContextMenu.SuspendLayout();
             this.SuspendLayout();
@@ -391,6 +394,8 @@
             // 
             this.splitContainer2.Panel1.Controls.Add(this.lblPlayTime);
             this.splitContainer2.Panel1.Controls.Add(this.trackPlayPosition);
+            this.splitContainer2.Panel1.Controls.Add(this.lblIconSize);
+            this.splitContainer2.Panel1.Controls.Add(this.trackIconSize);
             this.splitContainer2.Panel1.Controls.Add(this.label1);
             this.splitContainer2.Panel1.Controls.Add(this.btnPlay);
             this.splitContainer2.Panel1.Controls.Add(this.cmbSorting);
@@ -411,6 +416,31 @@
             this.lblPlayTime.Size = new System.Drawing.Size(48, 13);
             this.lblPlayTime.TabIndex = 4;
             this.lblPlayTime.Text = "--:-- / --:--";
+            // 
+            // lblIconSize
+            // 
+            this.lblIconSize.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblIconSize.AutoSize = true;
+            this.lblIconSize.Location = new System.Drawing.Point(650, 6);
+            this.lblIconSize.Name = "lblIconSize";
+            this.lblIconSize.Size = new System.Drawing.Size(39, 13);
+            this.lblIconSize.TabIndex = 5;
+            this.lblIconSize.Text = "128 px";
+            // 
+            // trackIconSize
+            // 
+            this.trackIconSize.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.trackIconSize.LargeChange = 32;
+            this.trackIconSize.Location = new System.Drawing.Point(686, 0);
+            this.trackIconSize.Maximum = 256;
+            this.trackIconSize.Minimum = 32;
+            this.trackIconSize.Name = "trackIconSize";
+            this.trackIconSize.Size = new System.Drawing.Size(120, 45);
+            this.trackIconSize.SmallChange = 8;
+            this.trackIconSize.TabIndex = 6;
+            this.trackIconSize.TickFrequency = 32;
+            this.trackIconSize.Value = 128;
+            this.trackIconSize.ValueChanged += new System.EventHandler(this.trackIconSize_ValueChanged);
             // 
             // trackPlayPosition
             // 
@@ -730,6 +760,7 @@
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer2)).EndInit();
             this.splitContainer2.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.trackPlayPosition)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.trackIconSize)).EndInit();
             this.statusStrip1.ResumeLayout(false);
             this.statusStrip1.PerformLayout();
             this.TonieContextMenu.ResumeLayout(false);
@@ -790,6 +821,8 @@
         private System.Windows.Forms.Button btnPlay;
         private System.Windows.Forms.TrackBar trackPlayPosition;
         private System.Windows.Forms.Label lblPlayTime;
+        private System.Windows.Forms.Label lblIconSize;
+        private System.Windows.Forms.TrackBar trackIconSize;
         private System.Windows.Forms.ToolStripMenuItem reportNFCTagToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem toggleLiveFlagToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem exportToToolStripMenuItem;
