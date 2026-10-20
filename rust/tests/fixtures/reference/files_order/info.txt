@@ -1,0 +1,15 @@
+[Mode: dump information]
+Dump of reference/files_order/0A0B0C08/500304E0 (UID E0040350080C0B0A):
+  Header: AudioID     0x5E03421D (2019-12-25T11:03:57)
+  Header: Length      0x00000FFC [OK]
+  Header: Padding     0x00000FD5
+  Header: AudioLen    0x000182EE [OK]
+  Header: Checksum    18B99F7916449BD909929E71B8BA6250B1284A25 [OK] [NO JSON INFO]
+  Header: Chapters    
+    Track #01  00:00:03.70  
+    Track #02  00:00:04.48  
+  Ogg: Segments       412 (min: 17 max: 17 per OggPage)
+  Ogg: net payload    97913 byte
+  Ogg: granules       total: 392640 (00:00:08.18 hh:mm:ss.ff)
+  Ogg: granules/page  min: 16320 max: 16320 (340ms - 340ms)
+

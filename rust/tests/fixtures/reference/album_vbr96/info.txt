@@ -1,0 +1,16 @@
+[Mode: dump information]
+Dump of reference/album_vbr96/0A0B0C02/500304E0 (UID E0040350020C0B0A):
+  Header: AudioID     0x5E034217 (2019-12-25T11:03:51)
+  Header: Length      0x00000FFC [OK]
+  Header: Padding     0x00000FD4
+  Header: AudioLen    0x00027206 [OK]
+  Header: Checksum    73CC9B6F94DA16F94E2D7CA9DEB8E8E58438E162 [OK] [NO JSON INFO]
+  Header: Chapters    
+    Track #01  00:00:04.70  
+    Track #02  00:00:06.10  
+    Track #03  00:00:02.42  
+  Ogg: Segments       674 (min: 17 max: 18 per OggPage)
+  Ogg: net payload    158454 byte
+  Ogg: granules       total: 634560 (00:00:13.22 hh:mm:ss.ff)
+  Ogg: granules/page  min: 15360 max: 16320 (320ms - 340ms)
+

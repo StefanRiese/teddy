@@ -1,0 +1,14 @@
+[Mode: dump information]
+Dump of reference/silence/0A0B0C06/500304E0 (UID E0040350060C0B0A):
+  Header: AudioID     0x5E03421B (2019-12-25T11:03:55)
+  Header: Length      0x00000FFC [OK]
+  Header: Padding     0x00000FD6
+  Header: AudioLen    0x00006894 [OK]
+  Header: Checksum    19592B159AD921051E38FB368F3E1EFD7486561E [OK] [NO JSON INFO]
+  Header: Chapters    
+    Track #01  00:00:02.18  
+  Ogg: Segments       112 (min: 17 max: 17 per OggPage)
+  Ogg: net payload    26417 byte
+  Ogg: granules       total: 104640 (00:00:02.18 hh:mm:ss.ff)
+  Ogg: granules/page  min: 16320 max: 16320 (340ms - 340ms)
+

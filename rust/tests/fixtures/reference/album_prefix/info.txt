@@ -1,0 +1,16 @@
+[Mode: dump information]
+Dump of reference/album_prefix/0A0B0C04/500304E0 (UID E0040350040C0B0A):
+  Header: AudioID     0x5E034219 (2019-12-25T11:03:53)
+  Header: Length      0x00000FFC [OK]
+  Header: Padding     0x00000FD4
+  Header: AudioLen    0x0002C4D0 [OK]
+  Header: Checksum    4BB323F819C366467531EE79A498232CA031F20A [OK] [NO JSON INFO]
+  Header: Chapters    
+    Track #01  00:00:05.06  
+    Track #02  00:00:06.80  
+    Track #03  00:00:03.16  
+  Ogg: Segments       754 (min: 17 max: 17 per OggPage)
+  Ogg: net payload    179433 byte
+  Ogg: granules       total: 720960 (00:00:15.02 hh:mm:ss.ff)
+  Ogg: granules/page  min: 16320 max: 16320 (340ms - 340ms)
+

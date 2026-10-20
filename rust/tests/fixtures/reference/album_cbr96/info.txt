@@ -1,0 +1,16 @@
+[Mode: dump information]
+Dump of reference/album_cbr96/0A0B0C01/500304E0 (UID E0040350010C0B0A):
+  Header: AudioID     0x5E034216 (2019-12-25T11:03:50)
+  Header: Length      0x00000FFC [OK]
+  Header: Padding     0x00000FD4
+  Header: AudioLen    0x0002710C [OK]
+  Header: Checksum    A0933A7C45C606D80170DE1E314D31F81EAAE6D7 [OK] [NO JSON INFO]
+  Header: Chapters    
+    Track #01  00:00:04.72  
+    Track #02  00:00:05.78  
+    Track #03  00:00:02.74  
+  Ogg: Segments       665 (min: 17 max: 17 per OggPage)
+  Ogg: net payload    158213 byte
+  Ogg: granules       total: 635520 (00:00:13.24 hh:mm:ss.ff)
+  Ogg: granules/page  min: 16320 max: 16320 (340ms - 340ms)
+

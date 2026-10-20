@@ -1,0 +1,26 @@
+[
+,
+  {
+    "uid": "E0040350070C0B0A",
+    "audio_id": "5E03421C",
+    "audio_date": "2019-12-25T11:03:56",
+    "header_length": 4092,
+    "header_ok": "TRUE",
+    "padding": 4054,
+    "audio_length": 24845,
+    "audio_length_check": "TRUE",
+    "audio_hash": "4D51442E2E5F898EA03995B9B4452146B5E31E82",
+    "audio_hash_check": "TRUE",
+    "chapters": [ 0, 0 ],
+    "segments": 205,
+    "min_segments_per_page": 34,
+    "max_segments_per_page": 34,
+    "segment_length_sum": 24397,
+    "highest_granule": 193920,
+    "time": "00:00:04.04",
+    "min_granules": 32640,
+    "max_granules": 32640,
+    "min_time": 680,
+    "max_time": 680
+  }
+]

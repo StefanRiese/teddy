@@ -1,0 +1,14 @@
+[Mode: dump information]
+Dump of reference/opus_input/0A0B0C07/500304E0 (UID E0040350070C0B0A):
+  Header: AudioID     0x5E03421C (2019-12-25T11:03:56)
+  Header: Length      0x00000FFC [OK]
+  Header: Padding     0x00000FD6
+  Header: AudioLen    0x0000610D [OK]
+  Header: Checksum    4D51442E2E5F898EA03995B9B4452146B5E31E82 [OK] [NO JSON INFO]
+  Header: Chapters    
+    Track #01  00:00:04.04  
+  Ogg: Segments       205 (min: 34 max: 34 per OggPage)
+  Ogg: net payload    24397 byte
+  Ogg: granules       total: 193920 (00:00:04.04 hh:mm:ss.ff)
+  Ogg: granules/page  min: 32640 max: 32640 (680ms - 680ms)
+

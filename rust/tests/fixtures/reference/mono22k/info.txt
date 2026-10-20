@@ -1,0 +1,14 @@
+[Mode: dump information]
+Dump of reference/mono22k/0A0B0C05/500304E0 (UID E0040350050C0B0A):
+  Header: AudioID     0x0E03421A (custom file, real date 2019-12-25T11:03:54)
+  Header: Length      0x00000FFC [OK]
+  Header: Padding     0x00000FD7
+  Header: AudioLen    0x0000F2EE [OK]
+  Header: Checksum    2F278F06DF4F70090E3445C540AF3BF7B588E13D [OK] [NO JSON INFO]
+  Header: Chapters    
+    Track #01  00:00:05.12  
+  Ogg: Segments       259 (min: 17 max: 17 per OggPage)
+  Ogg: net payload    61445 byte
+  Ogg: granules       total: 245760 (00:00:05.12 hh:mm:ss.ff)
+  Ogg: granules/page  min: 16320 max: 16320 (340ms - 340ms)
+
