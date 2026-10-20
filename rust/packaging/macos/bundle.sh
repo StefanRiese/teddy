@@ -21,11 +21,13 @@ stage="$work/TeddyBench"
 app="$stage/TeddyBench.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
+# separate directory: macOS file systems are case-insensitive, "teddybench" would clash with "TeddyBench"
+mkdir -p "$work/bin"
 for bin in teddybench teddy; do
-    lipo -create -output "$work/$bin" target/aarch64-apple-darwin/release/$bin target/x86_64-apple-darwin/release/$bin
+    lipo -create -output "$work/bin/$bin" target/aarch64-apple-darwin/release/$bin target/x86_64-apple-darwin/release/$bin
 done
-mv "$work/teddybench" "$app/Contents/MacOS/teddybench"
-mv "$work/teddy" "$stage/teddy"
+mv "$work/bin/teddybench" "$app/Contents/MacOS/teddybench"
+mv "$work/bin/teddy" "$stage/teddy"
 sed "s/@VERSION@/$version/g" "$here/Info.plist" > "$app/Contents/Info.plist"
 
 # icon from the app's own image
