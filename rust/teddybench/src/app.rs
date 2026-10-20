@@ -921,7 +921,7 @@ impl TeddyBenchApp {
                 Id::unique("grid_background"),
                 Sense::click_and_drag(),
             );
-            self.selection_frame(ui, &background, origin, &tile_rects);
+            let frame = self.selection_frame(ui, &background, origin, &tile_rects);
 
             let mut y = 0.0;
             for row in &rows {
@@ -950,6 +950,13 @@ impl TeddyBenchApp {
                 }
                 y += h;
             }
+
+            /* drawn last, so the frame lies on top of the tiles */
+            if let Some(area) = frame {
+                let visuals = ui.visuals();
+                ui.painter().rect_filled(area, 2.0, visuals.selection.bg_fill.gamma_multiply(0.25));
+                ui.painter().rect_stroke(area, 2.0, visuals.selection.stroke, egui::StrokeKind::Inside);
+            }
         });
 
         if let Some((path, modifiers)) = clicked {
@@ -959,7 +966,8 @@ impl TeddyBenchApp {
 
     /// Rubber band selection: everything the frame touches is selected, with Ctrl/Cmd in addition
     /// to the previous selection. Scrolls when dragging at the top or bottom edge.
-    fn selection_frame(&mut self, ui: &mut egui::Ui, background: &egui::Response, origin: egui::Pos2, tiles: &[(usize, Rect)]) {
+    /// Returns the frame to draw, in screen coordinates.
+    fn selection_frame(&mut self, ui: &mut egui::Ui, background: &egui::Response, origin: egui::Pos2, tiles: &[(usize, Rect)]) -> Option<Rect> {
         let modifiers = ui.input(|i| i.modifiers);
         let pointer = ui.input(|i| i.pointer.interact_pos());
 
@@ -981,9 +989,9 @@ impl TeddyBenchApp {
             self.frame_select = None;
         }
 
-        let (Some(frame), Some(p)) = (&self.frame_select, pointer) else { return };
+        let (Some(frame), Some(p)) = (&self.frame_select, pointer) else { return None };
         if !background.dragged() {
-            return;
+            return None;
         }
         let current = p - origin.to_vec2();
         let area = Rect::from_two_pos(frame.start, current);
@@ -994,11 +1002,6 @@ impl TeddyBenchApp {
             }
         }
         self.selection = selection;
-
-        let visuals = ui.visuals();
-        let screen_area = area.translate(origin.to_vec2());
-        ui.painter().rect_filled(screen_area, 2.0, visuals.selection.bg_fill.gamma_multiply(0.25));
-        ui.painter().rect_stroke(screen_area, 2.0, visuals.selection.stroke, egui::StrokeKind::Inside);
 
         /* keep scrolling while the pointer is at the edge of the visible area */
         let clip = ui.clip_rect();
@@ -1014,6 +1017,7 @@ impl TeddyBenchApp {
             ui.scroll_with_delta(Vec2::new(0.0, speed));
             ui.ctx().request_repaint();
         }
+        Some(area.translate(origin.to_vec2()))
     }
 
     /// Draws one tile. Returns the modifiers if it was clicked.
