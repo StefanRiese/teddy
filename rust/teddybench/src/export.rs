@@ -115,22 +115,62 @@ fn track_number(path: &Path) -> Option<usize> {
     path.file_stem()?.to_string_lossy().rsplit_once("Track_")?.1.parse().ok()
 }
 
+/// What an export directory looked like before a Tonie was exported into it, so a cancelled
+/// export can be undone without touching anything that was there before.
+struct DirSnapshot {
+    dir: PathBuf,
+    existed: bool,
+    files: std::collections::HashSet<std::ffi::OsString>,
+}
+
+impl DirSnapshot {
+    fn take(dir: &Path) -> DirSnapshot {
+        let files = std::fs::read_dir(dir)
+            .map(|d| d.filter_map(|e| e.ok().map(|e| e.file_name())).collect())
+            .unwrap_or_default();
+        DirSnapshot {
+            dir: dir.to_path_buf(),
+            existed: dir.exists(),
+            files,
+        }
+    }
+
+    /// Removes the directory if it was created by this export, otherwise only the files added since.
+    fn rollback(&self) {
+        if !self.existed {
+            std::fs::remove_dir_all(&self.dir).ok();
+            return;
+        }
+        for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
+            if !self.files.contains(&entry.file_name()) && entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                std::fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+}
+
 /// Exports the Tonies one after another. Errors of single Tonies are logged and skipped.
+/// When cancelled, the Tonie being exported is removed again; finished ones are kept.
 pub fn export(items: &[ExportItem], options: &ExportOptions, data_dir: &DataDir, status: &JobStatus) {
     for item in items {
         if status.cancelled() {
-            status.log("Export cancelled.");
             break;
         }
-        if let Err(e) = export_one(item, options, data_dir, status) {
-            status.log(format!("Failed to save file '{}': {e}", item.path.display()));
+        match export_one(item, options, data_dir, status) {
+            Ok(true) => {}
+            Ok(false) => status.log(format!("'{}' was not completed and has been removed.", item.path.display())),
+            Err(e) => status.log(format!("Failed to save file '{}': {e}", item.path.display())),
         }
         status.finished_items.fetch_add(1, Ordering::Relaxed);
+    }
+    if status.cancelled() {
+        status.log("Export cancelled.");
     }
     status.finish();
 }
 
-fn export_one(item: &ExportItem, options: &ExportOptions, data_dir: &DataDir, status: &JobStatus) -> Result<(), String> {
+/// Returns false if the export was cancelled; what was written for this Tonie is removed then.
+fn export_one(item: &ExportItem, options: &ExportOptions, data_dir: &DataDir, status: &JobStatus) -> Result<bool, String> {
     let display = item
         .info
         .as_ref()
@@ -142,7 +182,15 @@ fn export_one(item: &ExportItem, options: &ExportOptions, data_dir: &DataDir, st
     let tonie = TonieFile::open(&item.path, true).map_err(|e| e.to_string())?;
     let hash = tonie.hash_string();
     let dir = item_dir(&options.out_dir, options.create_dirs, item, tonie.header.audio_id);
+    let snapshot = DirSnapshot::take(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create '{}': {e}", dir.display()))?;
+    let cancelled = || {
+        let c = status.cancelled();
+        if c {
+            snapshot.rollback();
+        }
+        c
+    };
 
     let cover_result = match item.info.as_ref().and_then(|i| i.pic.as_deref()).filter(|p| !p.is_empty()) {
         Some(pic) => save_cover_image(data_dir, pic, &hash, &dir, false),
@@ -154,9 +202,12 @@ fn export_one(item: &ExportItem, options: &ExportOptions, data_dir: &DataDir, st
         status.set_detail(format!("Cover art: {r}"));
     }
 
+    if cancelled() {
+        return Ok(false);
+    }
     if options.format == ExportFormat::Mp3 && is_already_exported_as_mp3(&dir) {
         status.log(format!("'{display}': skipping, .mp3 files already exist"));
-        return Ok(());
+        return Ok(true);
     }
 
     let mut tags = vec![format!("TeddyVersion={}", options.version), format!("TeddyFile={}", item.path.display())];
@@ -169,10 +220,16 @@ fn export_one(item: &ExportItem, options: &ExportOptions, data_dir: &DataDir, st
     let titles = item.info.as_ref().map(|i| i.tracks.as_slice());
 
     let oggs = tonie.dump_audio_files(&dir, "", false, &tags, titles).map_err(|e| e.to_string())?;
+    if cancelled() {
+        return Ok(false);
+    }
     if options.format == ExportFormat::Mp3 {
         convert_to_mp3(&oggs, tonie.header.audio_chapters.len(), item.info.as_ref(), &dir, status);
+        if cancelled() {
+            return Ok(false);
+        }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Converts the exported Ogg tracks to MP3 in parallel. An Ogg is only deleted once its MP3 was written.
@@ -419,6 +476,67 @@ mod tests {
                 assert!(frames > 48000 * 4, "{frames}");
             }
         }
+    }
+
+    #[test]
+    fn rollback_removes_only_what_the_export_added() {
+        let out = tempfile::tempdir().unwrap();
+
+        /* directory created by the export: removed completely */
+        let new_dir = out.path().join("New Tonie");
+        let snap = DirSnapshot::take(&new_dir);
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(new_dir.join("Track_01.ogg"), b"x").unwrap();
+        snap.rollback();
+        assert!(!new_dir.exists());
+
+        /* existing directory: earlier files stay, new ones go */
+        let old_dir = out.path().join("Old Tonie");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::write(old_dir.join("Track_01.mp3"), b"earlier export").unwrap();
+        std::fs::write(old_dir.join("notes.txt"), b"mine").unwrap();
+        let snap = DirSnapshot::take(&old_dir);
+        std::fs::write(old_dir.join("Track_02.ogg"), b"x").unwrap();
+        std::fs::write(old_dir.join("cover.jpg"), b"x").unwrap();
+        snap.rollback();
+        let mut left: Vec<String> = std::fs::read_dir(&old_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["Track_01.mp3", "notes.txt"]);
+        assert!(out.path().is_dir());
+    }
+
+    #[test]
+    fn cancelled_export_leaves_nothing_behind() {
+        let data = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let item = ExportItem {
+            path: reference_tonie(),
+            uid: "E0040350010C0B0A".into(),
+            info: None,
+        };
+        let status = JobStatus::default();
+        let options = ExportOptions {
+            format: ExportFormat::Mp3,
+            out_dir: out.path().to_path_buf(),
+            create_dirs: true,
+            version: "test".into(),
+        };
+
+        /* cancel while the Tonie is being exported: after reading, before converting */
+        let cancel_after_cover = std::thread::scope(|s| {
+            s.spawn(|| {
+                while !status.text().log.iter().any(|l| l.starts_with("Cover art")) {
+                    std::thread::yield_now();
+                }
+                status.cancel.store(true, Ordering::Relaxed);
+            });
+            export_one(&item, &options, &DataDir(data.path().to_path_buf()), &status)
+        });
+        assert_eq!(cancel_after_cover, Ok(false));
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0, "the unfinished directory was not removed");
     }
 
     #[test]
