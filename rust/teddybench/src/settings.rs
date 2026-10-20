@@ -141,6 +141,26 @@ fn carry_over(from: &Path, to: &Path) {
     }
 }
 
+/// Default folder for exports: `Export` next to the program on Windows and Linux, like the C#
+/// version; `TeddyBench Export` in the Music folder on macOS (next to the app is usually
+/// /Applications) and when the program directory is read-only.
+pub fn default_export_dir() -> PathBuf {
+    let music = || {
+        directories::UserDirs::new()
+            .and_then(|u| u.audio_dir().or(Some(u.home_dir())).map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("TeddyBench Export")
+    };
+    if cfg!(target_os = "macos") {
+        return music();
+    }
+    export_dir_next_to(install_dir()).unwrap_or_else(music)
+}
+
+fn export_dir_next_to(install_dir: Option<PathBuf>) -> Option<PathBuf> {
+    install_dir.filter(|d| is_writable(d)).map(|d| d.join("Export"))
+}
+
 impl DataDir {
     /// Portable by default: the program directory, or `Contents/Data` in the macOS app bundle (see
     /// [`program_dir`]), so everything stays together like with the C# version. If that is not
@@ -237,6 +257,14 @@ mod tests {
         let user = tempfile::tempdir().unwrap();
         assert_eq!(DataDir::choose(Some(data.clone()), user.path().to_path_buf()).0, data);
         assert!(data.is_dir());
+    }
+
+    #[test]
+    fn export_directory_next_to_the_program() {
+        let program = tempfile::tempdir().unwrap();
+        assert_eq!(export_dir_next_to(Some(program.path().to_path_buf())), Some(program.path().join("Export")));
+        assert_eq!(export_dir_next_to(Some(program.path().join("missing"))), None);
+        assert_eq!(export_dir_next_to(None), None);
     }
 
     #[test]

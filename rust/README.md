@@ -63,6 +63,9 @@ the user's data directory is used instead: `%APPDATA%\TeddyBench\data` on Window
 `~/Library/Application Support/TeddyBench` on macOS, `~/.local/share/teddybench` on Linux.
 *Options* shows the directory in use. The settings file is compatible with the C# version.
 
+Exports go to an `Export` folder next to the program on Windows and Linux (`~/Music/TeddyBench Export`
+on macOS, or if the program directory is read-only); the folder chosen last is remembered.
+
 Note for macOS: replacing TeddyBench.app with a new version also replaces `Contents/Data`. Copy
 `customTonies.json` and `teddyBench.cfg` over to keep custom names and settings.
 

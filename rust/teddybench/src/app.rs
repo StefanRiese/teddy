@@ -221,13 +221,6 @@ fn format_date(t: Option<SystemTime>) -> String {
         .unwrap_or_default()
 }
 
-fn default_export_dir() -> PathBuf {
-    directories::UserDirs::new()
-        .and_then(|u| u.audio_dir().or(Some(u.home_dir())).map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("TeddyBench Export")
-}
-
 impl TeddyBenchApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> TeddyBenchApp {
         let data_dir = DataDir::locate();
@@ -560,7 +553,7 @@ impl TeddyBenchApp {
                         .get("ExportDirectory")
                         .and_then(|v| v.as_str())
                         .map(str::to_string)
-                        .unwrap_or_else(|| default_export_dir().display().to_string());
+                        .unwrap_or_else(|| teddybench::settings::default_export_dir().display().to_string());
                     self.dialog = Some(Dialog::Export(ExportDialog {
                         items,
                         format,
