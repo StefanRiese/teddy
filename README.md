@@ -19,7 +19,8 @@ release. The settings, custom names and Tonie files are compatible, so you can s
 
 ## Download
 
-Download the [latest release](https://github.com/StefanRiese/teddy/releases/latest) (tagged `rust-v*`):
+Download the [latest release](https://github.com/StefanRiese/teddy/releases/latest) (tagged `rust-v*`);
+[CHANGELOG.md](CHANGELOG.md) lists what changed in each version:
 
 | File | Platform |
 |---|---|

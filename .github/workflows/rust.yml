@@ -105,6 +105,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
     - name: Download packages
       uses: actions/download-artifact@v7
       with:
@@ -112,13 +115,18 @@ jobs:
         pattern: teddy-rust-*
         merge-multiple: true
 
+    # the section of the version from CHANGELOG.md, then the downloads
     - name: Publish release
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ github.ref_name }}
       run: |
-        cat > notes.md <<NOTES
-        Teddy and TeddyBench for Windows, Linux and macOS, built from \`${GITHUB_SHA::7}\`.
+        awk -v v="${TAG#rust-v}" '$1 == "##" { f = ($2 == v); next } f' CHANGELOG.md > notes.md
+        cat >> notes.md <<NOTES
+
+        ### Downloads
+
+        Built from \`${GITHUB_SHA::7}\`.
 
         | File | Platform |
         |---|---|
@@ -127,11 +135,7 @@ jobs:
         | \`teddy-rust-linux-x64.tar.gz\` | Linux (x86-64, needs ALSA for playback); \`./install-desktop-entry.sh\` adds it to the application menu |
 
         Each download contains TeddyBench (GUI) and \`teddy\` (command line). See the README inside.
-        On macOS, drag TeddyBench.app into Applications.
-
-        - The macOS app is not signed with an Apple Developer ID: the first time, right-click it → Open,
-          or run \`xattr -dr com.apple.quarantine /Applications/TeddyBench.app\`.
-        - NFC readers (Proxmark3, ESP with PN5180) are not yet tested with real hardware;
-          flashing the Proxmark3 firmware is not supported.
+        On macOS, drag TeddyBench.app into Applications. The macOS app is not signed with an Apple Developer ID:
+        the first time, right-click it → Open, or run \`xattr -dr com.apple.quarantine /Applications/TeddyBench.app\`.
         NOTES
         gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --title "TeddyBench ${TAG#rust-v}" --notes-file notes.md --latest --verify-tag
