@@ -173,9 +173,25 @@ impl TonieDb {
     }
 }
 
+/// Whether every word of `query` is found in one of `fields`, ignoring case
+pub fn matches_query(fields: &[&str], query: &str) -> bool {
+    let fields: Vec<String> = fields.iter().map(|f| f.to_lowercase()).collect();
+    query.to_lowercase().split_whitespace().all(|word| fields.iter().any(|f| f.contains(word)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_words_must_all_match() {
+        let fields = ["Bibi Blocksberg - Hexen", "E0040350010C0B0A", "0A0B0C01", "0x5E034216"];
+        assert!(matches_query(&fields, ""));
+        assert!(matches_query(&fields, "bibi hexen"));
+        assert!(matches_query(&fields, "010c0b"));
+        assert!(matches_query(&fields, "5e0342"));
+        assert!(!matches_query(&fields, "bibi benjamin"));
+    }
 
     #[test]
     fn finds_tonie_files_and_renamed_files() {

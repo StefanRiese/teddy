@@ -25,6 +25,7 @@ use tonie_core::tonies::TonieData;
 const MIN_ICON: u32 = 32;
 const MAX_ICON: u32 = 256;
 const HEADER_HEIGHT: f32 = 28.0;
+const SEARCH_ID: &str = "search";
 const LABEL_LINES: usize = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -121,6 +122,8 @@ struct NewTonie {
     audio_id: String,
     /// A single existing Tonie file that is copied instead of encoded
     copy_tonie_file: bool,
+    /// Custom name for the new Tonie, from the tags of the files
+    name: String,
 }
 
 struct ExportDialog {
@@ -272,6 +275,12 @@ pub struct TeddyBenchApp {
     nfc: Nfc,
     /// Scroll the grid to this Tonie
     scroll_to: Option<PathBuf>,
+    /// Audio ID last given to a new Tonie
+    last_audio_id: Option<u32>,
+    /// Custom names of Tonies being created, stored once their hash is known
+    pending_names: HashMap<PathBuf, String>,
+    /// Only Tonies matching this are shown
+    search: String,
     player: Option<Player>,
     playing: Option<PathBuf>,
     loading_rx: Option<Receiver<Result<TonieSource, String>>>,
@@ -358,6 +367,9 @@ impl TeddyBenchApp {
             job: None,
             nfc: Nfc::default(),
             scroll_to: None,
+            last_audio_id: None,
+            pending_names: HashMap::new(),
+            search: String::new(),
             player: None,
             playing: None,
             loading_rx: None,
@@ -547,6 +559,10 @@ impl TeddyBenchApp {
                     self.selection.retain(|p| paths.contains(p));
                 }
                 Event::Analyzed(path, result) => {
+                    if let (Ok(a), Some(name)) = (&result, self.pending_names.remove(&path)) {
+                        self.db.custom_names.insert(a.hash.clone(), name);
+                        self.db.save_custom_names(&self.data_dir.custom_tonies_json()).ok();
+                    }
                     if let Some(i) = self.entries.iter().position(|e| e.file.path == path) {
                         self.entries[i].analysis = Some(result);
                         self.resolve(i);
@@ -610,8 +626,32 @@ impl TeddyBenchApp {
 
     // ---- selection ----
 
+    /// Whether the Tonie matches the search: name, UID, folder, audio ID or file name
+    fn matches_search(&self, e: &Entry) -> bool {
+        if self.search.trim().is_empty() {
+            return true;
+        }
+        let name = e.name();
+        let folder = e
+            .file
+            .path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let file = e.file.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let audio_id = e.analysis().map(|a| format!("0x{:08X}", a.audio_id)).unwrap_or_default();
+        teddybench::library::matches_query(&[&name, &e.file.uid, &folder, &file, &audio_id], &self.search)
+    }
+
+    /// Deselects the Tonies the search hides, so actions only affect visible ones
+    fn deselect_hidden(&mut self) {
+        let visible: HashSet<PathBuf> = self.entries.iter().filter(|e| self.matches_search(e)).map(|e| e.file.path.clone()).collect();
+        self.selection.retain(|p| visible.contains(p));
+    }
+
     fn sorted_indices(&self) -> Vec<usize> {
-        let mut idx: Vec<usize> = (0..self.entries.len()).collect();
+        let mut idx: Vec<usize> = (0..self.entries.len()).filter(|&i| self.matches_search(&self.entries[i])).collect();
         let e = &self.entries;
         match self.sort {
             SortBy::Uid => idx.sort_by(|&a, &b| e[a].file.uid.cmp(&e[b].file.uid)),
@@ -816,7 +856,7 @@ impl TeddyBenchApp {
                 }
             }
             Action::DownloadJson => self.load_json(true, ctx),
-            Action::SelectAll => self.selection = self.entries.iter().map(|e| e.file.path.clone()).collect(),
+            Action::SelectAll => self.selection = self.sorted_indices().into_iter().map(|i| self.entries[i].file.path.clone()).collect(),
             Action::TagPdf(side) => self.create_tag_pdf(side),
             Action::ReadTag => {
                 if let Some(r) = &self.nfc.reader {
@@ -872,6 +912,11 @@ impl TeddyBenchApp {
             .iter()
             .map(|f| if copy_tonie_file { String::new() } else { actions::id3_description(f) })
             .collect();
+        let name = if copy_tonie_file {
+            String::new()
+        } else {
+            actions::title_from_tags(&files).unwrap_or_default()
+        };
         self.dialog = Some(Dialog::NewTonie(NewTonie {
             files,
             descriptions,
@@ -881,6 +926,7 @@ impl TeddyBenchApp {
             custom_audio_id: false,
             audio_id: String::new(),
             copy_tonie_file,
+            name,
         }));
     }
 
@@ -1067,6 +1113,24 @@ impl TeddyBenchApp {
                     }
                 }
             });
+            ui.separator();
+
+            let search = ui.add(
+                egui::TextEdit::singleline(&mut self.search)
+                    .id(Id::unique(SEARCH_ID))
+                    .desired_width(180.0)
+                    .hint_text("Search"),
+            );
+            let search = search.on_hover_text("Name, UID, folder or audio ID. Start typing anywhere to search, Esc clears.");
+            if search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.search.clear();
+            }
+            if !self.search.is_empty() && ui.small_button("✕").on_hover_text("Clear the search").clicked() {
+                self.search.clear();
+            }
+            if search.changed() || self.search.is_empty() {
+                self.deselect_hidden();
+            }
             ui.separator();
 
             let busy = self.loading_rx.is_some();
@@ -1429,7 +1493,12 @@ impl TeddyBenchApp {
             ui.label(text);
             if let Some(dir) = &self.current_dir {
                 ui.separator();
-                ui.label(format!("{} Tonies in {}", self.entries.len(), dir.display()));
+                let shown = if self.search.trim().is_empty() {
+                    self.entries.len().to_string()
+                } else {
+                    format!("{} of {}", self.entries.iter().filter(|e| self.matches_search(e)).count(), self.entries.len())
+                };
+                ui.label(format!("{shown} Tonies in {}", dir.display()));
             }
         });
     }
@@ -1713,6 +1782,7 @@ impl TeddyBenchApp {
                                 custom_audio_id: false,
                                 audio_id: String::new(),
                                 copy_tonie_file: false,
+                                name: String::new(),
                             },
                         ));
                         if self.dialog.is_some() {
@@ -1775,6 +1845,9 @@ impl TeddyBenchApp {
     fn run_new_tonie(&mut self, nt: NewTonie) {
         let Some(dir) = self.current_dir.clone() else { return };
         let uid = nt.uid.to_ascii_uppercase();
+        if !nt.name.trim().is_empty() {
+            self.pending_names.insert(uid::file_for_uid(&dir, &uid), nt.name.trim().to_string());
+        }
         if nt.copy_tonie_file {
             match actions::copy_tonie(&nt.files[0], &uid, &dir) {
                 Ok(_) => self.scanner.send(Command::Rescan),
@@ -1785,7 +1858,7 @@ impl TeddyBenchApp {
         let audio_id = if nt.custom_audio_id {
             u32::from_str_radix(nt.audio_id.trim().trim_start_matches("0x"), 16).unwrap_or(0)
         } else {
-            new_custom_audio_id()
+            self.new_custom_audio_id()
         };
         let job = self.start_job("Encoding", nt.files.len());
         std::thread::spawn(move || {
@@ -2041,7 +2114,7 @@ impl TeddyBenchApp {
         let selected = t.selected.and_then(|i| t.items.as_ref()?.get(i).cloned());
         if let (true, Some(item), Some(dir)) = (restore, &selected, self.current_dir.clone()) {
             let uid = t.uid.to_ascii_uppercase();
-            let new_id = t.as_new.then(new_custom_audio_id);
+            let new_id = if t.as_new { Some(self.new_custom_audio_id()) } else { None };
             t.status = Some(match trashcan::restore(&item.path, &uid, &dir, new_id) {
                 Ok(_) => {
                     /* a new audio ID changes the hash: keep the name */
@@ -2072,6 +2145,15 @@ impl TeddyBenchApp {
             });
         }
         !(r.inner || r.should_close())
+    }
+
+    /// Audio ID for a new Tonie, different from all on the card and those given before
+    fn new_custom_audio_id(&mut self) -> u32 {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let taken: HashSet<u32> = self.entries.iter().filter_map(|e| e.analysis().map(|a| a.audio_id)).collect();
+        let id = actions::custom_audio_id(now, self.last_audio_id, &taken);
+        self.last_audio_id = Some(id);
+        id
     }
 
     fn remove_trash_item(&self, t: &mut TrashView) {
@@ -2125,6 +2207,35 @@ impl TeddyBenchApp {
             }
         });
 
+        /* typing anywhere starts the search, Esc clears it */
+        if self.current_dir.is_some() && !ctx.memory(|m| m.focused().is_some()) {
+            let typed: String = ctx.input(|i| {
+                if i.modifiers.command || i.modifiers.alt {
+                    return String::new();
+                }
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Text(t) => Some(t.as_str()),
+                        _ => None,
+                    })
+                    .collect()
+            });
+            if !typed.trim().is_empty() {
+                self.search.push_str(&typed);
+                let id = Id::unique(SEARCH_ID);
+                ctx.memory_mut(|m| m.request_focus(id));
+                /* continue typing at the end instead of replacing the text */
+                let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+                let end = egui::text::CCursor::new(self.search.chars().count());
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+                state.store(ctx, id);
+                self.deselect_hidden();
+            } else if !self.search.is_empty() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.search.clear();
+            }
+        }
+
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -2137,12 +2248,6 @@ impl TeddyBenchApp {
             actions.push(Action::Add(dropped));
         }
     }
-}
-
-/// Audio ID for a Tonie made by TeddyBench: the time, below the range of retail Tonies
-fn new_custom_audio_id() -> u32 {
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
-    now.wrapping_sub(0x5000_0000)
 }
 
 /// How the shortcut Ctrl/Cmd + `key` is written on this platform
@@ -2191,6 +2296,11 @@ fn new_tonie_ui(ui: &mut egui::Ui, nt: &mut NewTonie) -> Option<bool> {
     if nt.copy_tonie_file {
         ui.label(format!("Copy {}", nt.files[0].display()));
     } else {
+        ui.horizontal(|ui| {
+            ui.label("Name:");
+            ui.add(egui::TextEdit::singleline(&mut nt.name).desired_width(400.0).hint_text("Unnamed Teddy"))
+                .on_hover_text("From the tags of the files (album artist and album) or their folder; can be changed later with Rename");
+        });
         ui.add_space(6.0);
         ui.label("Track order:");
         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
@@ -2491,12 +2601,18 @@ impl eframe::App for TeddyBenchApp {
 #[cfg(debug_assertions)]
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
-    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash` opens a dialog.
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash` opens a dialog,
+    /// `TEDDYBENCH_SCREENSHOT_SEARCH=<text>` searches.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some((path, started)) = self.screenshot.clone() else { return };
         ctx.request_repaint_after(Duration::from_millis(100));
         let elapsed = started.elapsed();
 
+        if elapsed > Duration::from_millis(2500) && self.search.is_empty() {
+            if let Ok(q) = std::env::var("TEDDYBENCH_SCREENSHOT_SEARCH") {
+                self.search = q;
+            }
+        }
         if elapsed > Duration::from_millis(2500) && self.selection.is_empty() {
             if let Some(n) = std::env::var("TEDDYBENCH_SCREENSHOT_SELECT").ok().and_then(|n| n.parse::<usize>().ok()) {
                 if let Some(&i) = self.sorted_indices().get(n) {

@@ -33,6 +33,10 @@ ff -filter_complex "sine=frequency=880:sample_rate=48000:duration=1,aformat=chan
 # Ogg Opus input
 ff -filter_complex "$(tone 392 4 48000 stereo)" -c:a libopus -b:a 96k -bitexact "$out/opus_input.ogg"
 
+# M4A (AAC) and Ogg Vorbis inputs; not used for the reference files, Teddy.exe could not read them
+ff -filter_complex "$(tone 494 2 44100 stereo)" -c:a aac -b:a 96k -bitexact -metadata title="AAC Track" -metadata album="Test Album" "$out/aac_input.m4a"
+ff -filter_complex "$(tone 587 2 44100 stereo)" -c:a libvorbis -q:a 2 -bitexact "$out/vorbis_input.ogg"
+
 # prefix files, prepended to each track when encoding with -p
 ff -filter_complex "sine=frequency=1000:sample_rate=44100:duration=0.5,aformat=channel_layouts=stereo" -c:a libmp3lame -b:a 128k -write_xing 0 -bitexact "$out/prefix/0001.mp3"
 ff -filter_complex "sine=frequency=1200:sample_rate=44100:duration=0.5,aformat=channel_layouts=stereo" -c:a libmp3lame -b:a 128k -write_xing 0 -bitexact "$out/prefix/0002.mp3"

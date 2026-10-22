@@ -19,7 +19,7 @@ use crate::writer::{CHANNELS, SAMPLE_RATE};
 use crate::Error;
 
 /// File extensions accepted as encoder input
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["mp3", "ogg", "opus", "flac", "wav"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["mp3", "ogg", "opus", "flac", "wav", "m4a", "m4b"];
 
 pub fn is_supported(path: &Path) -> bool {
     path.extension()
@@ -258,5 +258,38 @@ impl StereoResampler {
             sink(&self.output[skip * CHANNELS..(skip + usable) * CHANNELS])?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/inputs").join(name)
+    }
+
+    /// Seconds of 48 kHz stereo audio decoded from the file
+    fn decoded_seconds(name: &str) -> f64 {
+        let mut samples = 0usize;
+        decode_file(
+            &input(name),
+            &mut |s| {
+                samples += s.len();
+                Ok(())
+            },
+            &mut |_| {},
+        )
+        .unwrap();
+        samples as f64 / 2.0 / 48_000.0
+    }
+
+    #[test]
+    fn decodes_m4a_and_ogg_vorbis() {
+        for (name, seconds) in [("aac_input.m4a", 2.0), ("vorbis_input.ogg", 2.0), ("opus_input.ogg", 4.0)] {
+            assert!(is_supported(&input(name)), "{name}");
+            let got = decoded_seconds(name);
+            assert!((got - seconds).abs() < 0.1, "{name}: {got} s");
+        }
     }
 }

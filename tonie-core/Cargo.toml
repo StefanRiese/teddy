@@ -14,7 +14,7 @@ rubato = "5.0.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha1 = "0.11.0"
-symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "ogg", "wav", "flac", "pcm"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "ogg", "vorbis", "wav", "flac", "pcm", "isomp4", "aac", "alac"] }
 thiserror = "2.0.21"
 
 [dev-dependencies]

@@ -1,5 +1,6 @@
 //! Changes to the Tonie files on the SD card.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
@@ -22,6 +23,27 @@ pub fn id3_description(path: &Path) -> String {
         Ok(t) => format!("{} - {}", t.artist().unwrap_or(""), t.title().unwrap_or("")),
         Err(_) => String::new(),
     }
+}
+
+/// A name for a new Tonie from the tags of its files: "Album Artist - Album", "Artist - Album" or
+/// "Album" of the first file that has an album, else the name of the folder of the files.
+pub fn title_from_tags(files: &[PathBuf]) -> Option<String> {
+    let tagged = files.iter().filter_map(|f| id3::Tag::read_from_path(f).ok()).find_map(|t| {
+        let album = t.album().map(str::trim).filter(|a| !a.is_empty())?.to_string();
+        let artist = t.album_artist().or(t.artist()).map(str::trim).filter(|a| !a.is_empty());
+        Some(match artist {
+            Some(artist) => format!("{artist} - {album}"),
+            None => album,
+        })
+    });
+    tagged.or_else(|| {
+        let dir = files.first()?.parent()?;
+        files
+            .iter()
+            .all(|f| f.parent() == Some(dir))
+            .then(|| dir.file_name().map(|n| n.to_string_lossy().to_string()))
+            .flatten()
+    })
 }
 
 /// Forwards encoder progress to the job window, in the style of the original log.
@@ -215,9 +237,49 @@ pub fn open_with_default_program(file: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Audio ID for a Tonie made by TeddyBench: the time in seconds, moved below the range of retail
+/// Tonies like the original does. Never `last` or less and none of `taken`, so Tonies made within
+/// the same second still get different IDs.
+pub fn custom_audio_id(now_secs: u64, last: Option<u32>, taken: &HashSet<u32>) -> u32 {
+    let mut id = (now_secs as u32).wrapping_sub(0x5000_0000);
+    if let Some(last) = last.filter(|&l| id <= l) {
+        id = last.wrapping_add(1);
+    }
+    while taken.contains(&id) {
+        id = id.wrapping_add(1);
+    }
+    id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titles_from_tags() {
+        let album = fixtures().join("inputs/album");
+        /* the album has no artist */
+        assert_eq!(title_from_tags(&[album.join("a_intro.mp3")]).as_deref(), Some("Test Album"));
+        /* no tags: the folder */
+        let prefix = fixtures().join("inputs/prefix");
+        assert_eq!(title_from_tags(&[prefix.join("0001.mp3"), prefix.join("0002.mp3")]).as_deref(), Some("prefix"));
+        /* no tags, different folders */
+        assert_eq!(title_from_tags(&[prefix.join("0001.mp3"), fixtures().join("inputs/silence.mp3")]), None);
+    }
+
+    #[test]
+    fn audio_ids_are_unique() {
+        let now = 0x6900_0000;
+        let none = HashSet::new();
+        assert_eq!(custom_audio_id(now, None, &none), 0x1900_0000);
+        /* the same second again */
+        assert_eq!(custom_audio_id(now, Some(0x1900_0000), &none), 0x1900_0001);
+        /* already on the card */
+        let taken = HashSet::from([0x1900_0000, 0x1900_0001]);
+        assert_eq!(custom_audio_id(now, None, &taken), 0x1900_0002);
+        /* the clock went back */
+        assert_eq!(custom_audio_id(now - 10, Some(0x1900_0005), &none), 0x1900_0006);
+    }
 
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures")

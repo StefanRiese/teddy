@@ -41,9 +41,13 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
 
 - Cover grid with names and covers from `tonies.json` ([api.revvox.de](https://api.revvox.de/tonies.json))
   and your own names from `customTonies.json`; icon size slider, sorting by UID, product number, date or type.
+- **Search** by name, UID, folder or audio ID: start typing anywhere, Esc clears the search. Only the
+  Tonies found stay selected, so actions never affect hidden ones.
 - Details of the selected Tonie with its track list, playback with seeking.
-- Create Tonie files from audio files (MP3, Ogg Opus, FLAC, WAV; also by drag and drop onto the window) with
-  track ordering, or add an existing Tonie file.
+- Create Tonie files from audio files (MP3, Ogg Opus, Ogg Vorbis, FLAC, WAV, M4A; also by drag and drop
+  onto the window) with track ordering, or add an existing Tonie file. The new Tonie is named after the tags
+  of the files (album artist and album) or their folder. Each new Tonie gets its own audio ID, also when
+  several are made within a second.
 - Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
   **Remove all live flags** (Ctrl+L, on macOS Cmd+L) clears the flag of every Tonie on the card at once.
 - **Deleted Tonies (TRASHCAN):** a Toniebox connected to the cloud moves deleted Tonies into the `TRASHCAN`
@@ -164,7 +168,7 @@ teddy -m encode -o out/ my-album/                   Create a Tonie file from all
 teddy -m rename <source dir> <destination dir>      Move Tonie files to readable names (dry run without -y)
 ```
 
-`encode` reads MP3, Ogg Opus, FLAC and WAV files; the files of a folder are ordered by their ID3 track
+`encode` reads MP3, Ogg Opus, Ogg Vorbis, FLAC, WAV and M4A (AAC, ALAC) files; the files of a folder are ordered by their ID3 track
 number. The bit rate must be a multiple of 24 kbps, otherwise the output file is incompatible. Prefix files
 (`0001.mp3`, `0002.mp3`, …) in the `--prefix` location are prepended to the matching track, e.g. to announce
 the track number.
@@ -212,7 +216,7 @@ Intentional fixes:
   file). Files encoded now are that much shorter.
 - **`info -f json`** writes valid JSON (no separator before the first entry).
 - **Exit code** is non-zero when something failed; a failed encode leaves no partial file behind.
-- More input formats: MP3, Ogg Opus, FLAC and WAV (Teddy.exe: MP3 and Ogg).
+- More input formats: MP3, Ogg Opus, Ogg Vorbis, FLAC, WAV and M4A (Teddy.exe: MP3 and Ogg).
 - The tag backside PDF is saved as `CustomTagBacksideFilename`; the C# version overwrote the cover PDF.
 - Removing a tag from an ESP with PN5180 deselects its Tonie again, like with a Proxmark3.
 
