@@ -3,7 +3,7 @@
 Releases are tagged `rust-v<version>`. The former C# TeddyBench (`v1.x` releases) is kept in the
 `csharp-backup` branch.
 
-## Unreleased
+## 0.1.7 – 2026-10-22
 
 - Ogg Opus files that fit a Tonie (stereo, 20 ms packets) are copied into new Tonies without re-encoding, in
   TeddyBench and `teddy -m encode` (upstream issue #52). Tracks exported with *Save as .ogg* or `teddy -m
