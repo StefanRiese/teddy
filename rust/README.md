@@ -55,9 +55,16 @@ Implemented so far:
   (*Custom tag → Print layout*, stored in the `CustomTag*` settings)
 - Debug window with the background messages (*Options → Debug window*)
 - *Help → Releases page* links to the GitHub releases
+- NFC readers: a Proxmark3 or an ESP with a PN5180 (*NFC reader → Autodetect reader*). The
+  reader is searched on the USB serial ports; a tag put on it selects its Tonie and fills in the UID
+  when assigning a UID or creating a Tonie. Tags in privacy mode are unlocked with the Proxmark3
+  firmware with the [SLIX-L features](https://github.com/g3gg0/proxmark3/tree/iso15693_slix_l_features),
+  which also allows reading and emulating tags (*Advanced actions*). The antenna measurement works
+  with any Proxmark3 firmware. `TEDDYBENCH_NFC_PORT=<port>` uses that port instead of searching.
+  On Linux the user needs to be in the `dialout` group.
 
-Not yet: NFC readers (phase 4). Dropped on purpose: the automatic update download and diagnostics
-reports (they were sent to a server of the original project).
+Not yet: flashing the Proxmark3 firmware (use the Proxmark3 tools). Dropped on purpose: the
+automatic update download and diagnostics reports (they were sent to a server of the original project).
 
 Data files (`teddyBench.cfg`, `tonies.json`, `customTonies.json`, `cache/`) are kept next to the program
 (portable, like the C# version); in the macOS app inside `TeddyBench.app/Contents/Data`. If that location
@@ -101,6 +108,7 @@ Intentional fixes:
 - **Exit code** is non-zero when something failed; a failed encode leaves no partial file behind.
 - More input formats: MP3, Ogg Opus, FLAC and WAV.
 - The tag backside PDF is saved as `CustomTagBacksideFilename`; the C# version overwrote the cover PDF.
+- Removing a tag from an ESP with PN5180 deselects its Tonie again, like with a Proxmark3.
 
 Other differences:
 

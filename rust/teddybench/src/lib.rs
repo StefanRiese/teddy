@@ -10,6 +10,7 @@ pub mod export;
 pub mod fsattr;
 pub mod library;
 pub mod player;
+pub mod rfid;
 pub mod scanner;
 pub mod settings;
 pub mod tagpdf;

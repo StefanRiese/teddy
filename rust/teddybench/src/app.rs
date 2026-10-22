@@ -11,6 +11,7 @@ use eframe::egui::{self, Color32, ColorImage, Id, Rect, Sense, TextureHandle, Te
 use teddybench::export::{ExportFormat, ExportItem, ExportOptions, JobStatus};
 use teddybench::library::{Analysis, FoundFile, Kind, Resolved, TonieDb};
 use teddybench::player::{Player, TonieSource};
+use teddybench::rfid::{self, DeviceInfo, Measurement, Reader, ReaderKind};
 use teddybench::scanner::{Command, Event, Scanner};
 use teddybench::settings::{DataDir, Settings};
 use teddybench::tagpdf::{TagLayout, TagSide};
@@ -141,13 +142,54 @@ struct TagLayoutDraft {
 
 enum Dialog {
     NewTonie(NewTonie),
-    AssignUid { path: PathBuf, uid: String },
-    Rename { hash: String, name: String },
+    AssignUid {
+        path: PathBuf,
+        uid: String,
+    },
+    Rename {
+        hash: String,
+        name: String,
+    },
     ConfirmDelete(Vec<PathBuf>),
     Export(ExportDialog),
-    Message { title: String, text: String },
+    Message {
+        title: String,
+        text: String,
+    },
     About,
     TagLayout(TagLayoutDraft),
+    /// UID and memory of a tag as hex: shown after reading, or entered for the emulation
+    TagDump {
+        text: String,
+        input: bool,
+        error: Option<String>,
+    },
+    Antenna(Measurement),
+}
+
+/// What the NFC reader is busy with while a "Tag operation" window is shown
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TagOperation {
+    Read,
+    Emulate,
+    Measure,
+}
+
+/// The NFC reader and what it reported
+#[derive(Default)]
+struct Nfc {
+    /// The kind the running reader looks for
+    kind: Option<ReaderKind>,
+    reader: Option<Reader>,
+    device: Option<DeviceInfo>,
+    /// The tag on the reader
+    uid: Option<String>,
+    /// The selection was made because a tag was put on the reader, and is undone when it is removed
+    auto_selected: bool,
+    operation: Option<TagOperation>,
+    console: bool,
+    /// Tag content last read, offered for the emulation
+    last_dump: String,
 }
 
 /// A selection frame being dragged in the grid
@@ -183,6 +225,9 @@ enum Action {
     DownloadJson,
     SelectAll,
     TagPdf(TagSide),
+    ReadTag,
+    EmulateTag,
+    MeasureAntenna,
 }
 
 pub struct TeddyBenchApp {
@@ -203,6 +248,9 @@ pub struct TeddyBenchApp {
     sort: SortBy,
     dialog: Option<Dialog>,
     job: Option<RunningJob>,
+    nfc: Nfc,
+    /// Scroll the grid to this Tonie
+    scroll_to: Option<PathBuf>,
     player: Option<Player>,
     playing: Option<PathBuf>,
     loading_rx: Option<Receiver<Result<TonieSource, String>>>,
@@ -287,6 +335,8 @@ impl TeddyBenchApp {
             sort: SortBy::Date,
             dialog: None,
             job: None,
+            nfc: Nfc::default(),
+            scroll_to: None,
             player: None,
             playing: None,
             loading_rx: None,
@@ -296,7 +346,114 @@ impl TeddyBenchApp {
         };
         app.sort = SortBy::from_setting(&app.settings.sort_by);
         app.load_json(app.settings.download_json, &cc.egui_ctx);
+        app.update_reader(&cc.egui_ctx);
         app
+    }
+
+    /// Starts or stops the NFC reader as the settings say
+    fn update_reader(&mut self, ctx: &egui::Context) {
+        let kind = self.settings.nfc_enabled.then(|| ReaderKind::from_setting(&self.settings.nfc_type));
+        if kind == self.nfc.kind {
+            return;
+        }
+        if let Some(old) = self.nfc.reader.take() {
+            /* stopping waits for the device to answer, don't block the window meanwhile */
+            std::thread::spawn(move || drop(old));
+        }
+        self.uid_found(None);
+        let last_dump = std::mem::take(&mut self.nfc.last_dump);
+        self.nfc = Nfc {
+            kind,
+            last_dump,
+            ..Default::default()
+        };
+        if let Some(kind) = kind {
+            let ctx = ctx.clone();
+            self.nfc.reader = Some(Reader::start(kind, move || ctx.request_repaint()));
+        }
+    }
+
+    /// A tag was put on the reader (or removed): select its Tonie and fill in the UID where one is asked for
+    fn uid_found(&mut self, uid: Option<String>) {
+        if uid == self.nfc.uid {
+            return;
+        }
+        self.nfc.uid = uid.clone();
+
+        let found = uid.as_ref().and_then(|uid| {
+            match &mut self.dialog {
+                Some(Dialog::AssignUid { uid: u, .. }) => *u = uid.clone(),
+                Some(Dialog::NewTonie(nt)) => nt.uid = uid.clone(),
+                _ => {}
+            }
+            self.entries.iter().find(|e| e.file.uid.eq_ignore_ascii_case(uid)).map(|e| e.file.path.clone())
+        });
+        match found {
+            Some(path) => {
+                self.selection = BTreeSet::from([path.clone()]);
+                self.anchor = Some(path.clone());
+                self.scroll_to = Some(path);
+                self.nfc.auto_selected = true;
+            }
+            None if self.nfc.auto_selected => {
+                self.selection.clear();
+                self.nfc.auto_selected = false;
+            }
+            None => {}
+        }
+    }
+
+    fn process_reader_events(&mut self) {
+        let events: Vec<rfid::Event> = match &self.nfc.reader {
+            Some(r) => r.events.try_iter().collect(),
+            None => return,
+        };
+        for event in events {
+            match event {
+                rfid::Event::Device(device) => {
+                    if device.is_none() {
+                        self.nfc.console = false;
+                        if self.nfc.operation.take().is_some() {
+                            self.message("NFC reader", "The reader was lost.");
+                        }
+                    }
+                    self.nfc.device = device;
+                }
+                rfid::Event::Uid(uid) => self.uid_found(uid),
+                rfid::Event::Memory(data) => {
+                    /* None if cancelled meanwhile */
+                    if self.nfc.operation.take() != Some(TagOperation::Read) {
+                        continue;
+                    }
+                    match data {
+                        Some(data) => {
+                            let text: String = data.iter().map(|b| format!("{b:02X}")).collect();
+                            self.nfc.last_dump = text.clone();
+                            self.dialog = Some(Dialog::TagDump {
+                                text,
+                                input: false,
+                                error: None,
+                            });
+                        }
+                        None => self.message("Failed", "No tag found. Please make sure you position it correctly."),
+                    }
+                }
+                rfid::Event::Measurement(m) => {
+                    if self.nfc.operation.take() != Some(TagOperation::Measure) {
+                        continue;
+                    }
+                    match m {
+                        Some(m) => self.dialog = Some(Dialog::Antenna(m)),
+                        None => self.message("Failed", "Measurement failed."),
+                    }
+                }
+                rfid::Event::EmulationEnded => {
+                    if self.nfc.operation == Some(TagOperation::Emulate) {
+                        self.nfc.operation = None;
+                    }
+                }
+            }
+        }
     }
 
     fn save_settings(&self) {
@@ -324,6 +481,8 @@ impl TeddyBenchApp {
     // ---- background events ----
 
     fn process_events(&mut self, ctx: &egui::Context) {
+        self.process_reader_events();
+
         if let Some(rx) = &self.json_rx {
             if let Ok((tonies, status)) = rx.try_recv() {
                 self.db.tonies = tonies;
@@ -457,6 +616,7 @@ impl TeddyBenchApp {
     }
 
     fn click(&mut self, path: &Path, modifiers: egui::Modifiers, order: &[usize]) {
+        self.nfc.auto_selected = false;
         if modifiers.shift {
             if let Some(anchor) = &self.anchor {
                 let pos = |p: &Path| order.iter().position(|&i| self.entries[i].file.path == p);
@@ -605,6 +765,25 @@ impl TeddyBenchApp {
             Action::DownloadJson => self.load_json(true, ctx),
             Action::SelectAll => self.selection = self.entries.iter().map(|e| e.file.path.clone()).collect(),
             Action::TagPdf(side) => self.create_tag_pdf(side),
+            Action::ReadTag => {
+                if let Some(r) = &self.nfc.reader {
+                    r.read_memory();
+                    self.nfc.operation = Some(TagOperation::Read);
+                }
+            }
+            Action::EmulateTag => {
+                self.dialog = Some(Dialog::TagDump {
+                    text: self.nfc.last_dump.clone(),
+                    input: true,
+                    error: None,
+                });
+            }
+            Action::MeasureAntenna => {
+                if let Some(r) = &self.nfc.reader {
+                    r.measure_antenna();
+                    self.nfc.operation = Some(TagOperation::Measure);
+                }
+            }
         }
     }
 
@@ -644,7 +823,8 @@ impl TeddyBenchApp {
             files,
             descriptions,
             selected: None,
-            uid: UID_PREFIX.into(),
+            /* the tag on the reader, if there is one */
+            uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFIX.into()),
             custom_audio_id: false,
             audio_id: String::new(),
             copy_tonie_file,
@@ -729,6 +909,7 @@ impl TeddyBenchApp {
                     }));
                 }
             });
+            ui.menu_button("NFC reader", |ui| self.nfc_menu(ui, actions));
             ui.menu_button("Options", |ui| {
                 if ui.checkbox(&mut self.settings.download_json, "Download tonies.json on startup").changed() {
                     self.save_settings();
@@ -758,6 +939,65 @@ impl TeddyBenchApp {
                 }
                 if ui.button("About").clicked() {
                     self.dialog = Some(Dialog::About);
+                }
+            });
+        });
+    }
+
+    fn nfc_menu(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let mut changed = ui
+            .checkbox(&mut self.settings.nfc_enabled, "Autodetect reader")
+            .on_hover_text("Look for the reader on the USB serial ports. The UID of a tag on it selects its Tonie and is filled in where one is asked for.")
+            .changed();
+        let mut kind = ReaderKind::from_setting(&self.settings.nfc_type);
+        for k in ReaderKind::ALL {
+            changed |= ui.radio_value(&mut kind, k, k.label()).changed();
+        }
+        if changed {
+            self.settings.nfc_type = kind.setting().into();
+            self.save_settings();
+            self.update_reader(ui.ctx());
+        }
+
+        ui.separator();
+        match (&self.nfc.device, self.settings.nfc_enabled) {
+            (Some(d), _) => ui.label(format!("{} at {}", d.hardware, d.port)),
+            (None, true) => ui.label(egui::RichText::new(format!("Looking for a {}...", kind.label())).weak()),
+            (None, false) => ui.label(egui::RichText::new("Not looking for a reader").weak()),
+        };
+
+        let pm3 = self.nfc.device.as_ref().filter(|d| d.kind == ReaderKind::Proxmark3);
+        let slix = pm3.is_some_and(|d| d.unlock_supported);
+        let busy = self.nfc.operation.is_some();
+        ui.add_enabled_ui(pm3.is_some(), |ui| {
+            ui.menu_button("Advanced actions", |ui| {
+                const NEEDS_FIRMWARE: &str = "Needs the Proxmark3 firmware with the SLIX-L features";
+                let mut item = |ui: &mut egui::Ui, enabled: bool, text: &str, action: fn() -> Action| {
+                    let r = ui.add_enabled(enabled && !busy, egui::Button::new(text));
+                    let r = if enabled { r } else { r.on_disabled_hover_text(NEEDS_FIRMWARE) };
+                    if r.clicked() {
+                        actions.push(action());
+                        ui.close();
+                    }
+                };
+                item(ui, slix, "Read tag content", || Action::ReadTag);
+                item(ui, slix, "Emulate tag...", || Action::EmulateTag);
+                item(ui, true, "Measure antenna", || Action::MeasureAntenna);
+                ui.separator();
+                let r = ui.add_enabled(slix, egui::Checkbox::new(&mut self.nfc.console, "Console mode (experts only)"));
+                let r = if slix {
+                    r.on_hover_text("Stop looking for tags and show the messages of the device in the debug window")
+                } else {
+                    r.on_disabled_hover_text(NEEDS_FIRMWARE)
+                };
+                if r.changed() {
+                    if let Some(reader) = &self.nfc.reader {
+                        reader.set_console(self.nfc.console);
+                    }
+                    if self.nfc.console && !self.settings.debug_window {
+                        self.settings.debug_window = true;
+                        self.save_settings();
+                    }
                 }
             });
         });
@@ -909,11 +1149,18 @@ impl TeddyBenchApp {
         }
 
         let mut clicked: Option<(PathBuf, egui::Modifiers)> = None;
+        let scroll_to = self
+            .scroll_to
+            .take()
+            .and_then(|p| tile_rects.iter().find(|(i, _)| self.entries[*i].file.path == p).map(|(_, r)| *r));
         /* dragging the content only scrolls on touch screens, so mouse drags draw the selection frame */
         egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
             ui.set_height(total.max(viewport.height()));
             ui.set_width(width);
             let origin = ui.min_rect().min;
+            if let Some(rect) = scroll_to {
+                ui.scroll_to_rect(rect.translate(origin.to_vec2()), None);
+            }
 
             /* the background below the tiles: dragging draws a selection frame, a click clears the selection */
             let background = ui.interact(
@@ -1092,6 +1339,19 @@ impl TeddyBenchApp {
 
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            if let Some(d) = &self.nfc.device {
+                let mut fw = String::new();
+                if d.kind == ReaderKind::Proxmark3 {
+                    fw = format!(" (FW: {}", if d.unlock_supported { "SLIX-L enabled" } else { "stock" });
+                    if let (true, Some(v)) = (self.settings.debug_window, d.antenna_voltage) {
+                        fw += &format!(", {v:.2} V");
+                    }
+                    fw += ")";
+                }
+                ui.label(format!("{}{fw} found at {}.", d.hardware, d.port))
+                    .on_hover_text("The UID of the tag will be automatically used where applicable.");
+                ui.separator();
+            }
             let mut text = if self.db.tonies.is_empty() {
                 "No tonies.json loaded, consider downloading it".to_string()
             } else {
@@ -1180,6 +1440,82 @@ impl TeddyBenchApp {
                     self.save_settings();
                 }
                 keep = !(ok || cancel || r.should_close());
+            }
+            Dialog::TagDump { text, input, error } => {
+                let r = egui::Modal::new(Id::unique("tag_dump")).show(ctx, |ui| {
+                    ui.set_width(480.0);
+                    ui.heading(if *input { "Emulate tag" } else { "Tag content" });
+                    ui.label(if *input {
+                        "Enter the UID and memory content of your tag: 40 bytes in hex, 8 bytes UID and 32 bytes data."
+                    } else {
+                        "This is the UID and memory content of your tag"
+                    });
+                    let edit = egui::TextEdit::multiline(text)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .interactive(*input);
+                    ui.add(edit);
+                    if let Some(e) = error {
+                        ui.colored_label(Color32::from_rgb(190, 60, 80), e.as_str());
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if *input {
+                            (ui.button("Emulate").clicked(), ui.button("Cancel").clicked())
+                        } else {
+                            if ui.button("Copy").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                            }
+                            (false, ui.button("Close").clicked())
+                        }
+                    })
+                    .inner
+                });
+                let (ok, cancel) = r.inner;
+                keep = !(cancel || r.should_close());
+                if ok {
+                    match parse_tag_dump(text) {
+                        Ok(data) => {
+                            self.nfc.last_dump = text.trim().to_string();
+                            if let Some(reader) = &self.nfc.reader {
+                                reader.emulate(data);
+                                self.nfc.operation = Some(TagOperation::Emulate);
+                            }
+                            return;
+                        }
+                        Err(e) => *error = Some(e),
+                    }
+                }
+            }
+            Dialog::Antenna(m) => {
+                let r = egui::Modal::new(Id::unique("antenna")).show(ctx, |ui| {
+                    ui.heading("Proxmark3 antenna");
+                    egui::Grid::new("antenna_values").num_columns(2).show(ui, |ui| {
+                        let mut row = |k: &str, v: egui::RichText| {
+                            ui.label(k);
+                            ui.label(v);
+                            ui.end_row();
+                        };
+                        let rating = m.hf_rating();
+                        let color = match rating {
+                            "good" | "wow" => Color32::from_rgb(40, 140, 60),
+                            "weak" | "meh" | "danger" => Color32::from_rgb(200, 140, 30),
+                            _ => Color32::from_rgb(190, 60, 80),
+                        };
+                        row("HF", egui::RichText::new(format!("{:.2} V ({rating})", m.v_hf)).color(color).strong());
+                        row("LF 125 kHz", format!("{:.2} V", m.v_lf125).into());
+                        row("LF 134 kHz", format!("{:.2} V", m.v_lf134).into());
+                        row("LF optimal frequency", format!("{:.2} kHz", m.peak_frequency_khz()).into());
+                        row("LF optimal voltage", format!("{:.2} V", m.peak_v).into());
+                    });
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("LF antenna plot (no relevance for Tonies)").weak());
+                    antenna_plot(ui, m);
+                    ui.add_space(8.0);
+                    ui.button("Close").clicked()
+                });
+                keep = !(r.inner || r.should_close());
             }
             Dialog::Rename { hash, name } => {
                 let r = egui::Modal::new(Id::unique("rename")).show(ctx, |ui| {
@@ -1495,8 +1831,33 @@ impl TeddyBenchApp {
         }
     }
 
+    fn tag_operation_window(&mut self, ctx: &egui::Context) {
+        let Some(op) = self.nfc.operation else { return };
+        let mut cancel = false;
+        egui::Modal::new(Id::unique("tag_operation")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("Tag operation...");
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(match op {
+                    TagOperation::Read => "Reading the tag. Please place it on the reader.",
+                    TagOperation::Emulate => "Emulating the tag. Press the button on the Proxmark3 to stop.",
+                    TagOperation::Measure => "Measuring the antenna, this takes a few seconds.",
+                });
+            });
+            ui.add_space(8.0);
+            cancel = ui.button("Cancel").clicked();
+        });
+        if cancel {
+            if let Some(r) = &self.nfc.reader {
+                r.cancel();
+            }
+            self.nfc.operation = None;
+        }
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
-        if self.dialog.is_some() || self.job.is_some() || ctx.egui_wants_keyboard_input() {
+        if self.dialog.is_some() || self.job.is_some() || self.nfc.operation.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
         ctx.input(|i| {
@@ -1679,6 +2040,74 @@ fn export_ui(ui: &mut egui::Ui, ed: &mut ExportDialog) -> Option<ExportChoice> {
     .inner
 }
 
+/// The hex text of the tag dump dialog: UID and memory, 40 bytes
+fn parse_tag_dump(text: &str) -> Result<Vec<u8>, String> {
+    let digits: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let error = || "The hex code must represent 40 byte in hexadecimal numbers: 8 byte UUID and 32 byte data.".to_string();
+    if digits.len() != 80 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(error());
+    }
+    (0..80)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|_| error()))
+        .collect()
+}
+
+/// The LF sweep of the antenna measurement, amplitude over frequency
+fn antenna_plot(ui: &mut egui::Ui, m: &Measurement) {
+    const F: (f64, f64) = (46.0, 600.0);
+    const V: (f64, f64) = (0.0, 65.0);
+    let (response, painter) = ui.allocate_painter(Vec2::new(480.0, 220.0), Sense::hover());
+    let visuals = ui.visuals();
+    let font = egui::FontId::proportional(10.0);
+    /* room for the axis labels */
+    let area = Rect::from_min_max(response.rect.min + Vec2::new(32.0, 4.0), response.rect.max - Vec2::new(8.0, 18.0));
+    let pos = |f: f64, v: f64| {
+        egui::pos2(
+            area.left() + ((f - F.0) / (F.1 - F.0)) as f32 * area.width(),
+            area.bottom() - ((v - V.0) / (V.1 - V.0)) as f32 * area.height(),
+        )
+    };
+    let grid = egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color);
+    painter.rect_filled(area, 0.0, visuals.extreme_bg_color);
+    for f in (100..=600).step_by(100) {
+        let x = pos(f as f64, 0.0).x;
+        painter.line_segment([egui::pos2(x, area.top()), egui::pos2(x, area.bottom())], grid);
+        painter.text(
+            egui::pos2(x, area.bottom() + 2.0),
+            egui::Align2::CENTER_TOP,
+            format!("{f}"),
+            font.clone(),
+            visuals.weak_text_color(),
+        );
+    }
+    for v in (0..=60).step_by(20) {
+        let y = pos(F.0, v as f64).y;
+        painter.line_segment([egui::pos2(area.left(), y), egui::pos2(area.right(), y)], grid);
+        painter.text(
+            egui::pos2(area.left() - 4.0, y),
+            egui::Align2::RIGHT_CENTER,
+            format!("{v} V"),
+            font.clone(),
+            visuals.weak_text_color(),
+        );
+    }
+    painter.text(
+        area.right_bottom() + Vec2::new(0.0, 2.0),
+        egui::Align2::RIGHT_TOP,
+        "kHz",
+        font,
+        visuals.weak_text_color(),
+    );
+    let points: Vec<egui::Pos2> = m
+        .sweep()
+        .into_iter()
+        .filter(|(f, _)| (F.0..=F.1).contains(f))
+        .map(|(f, v)| pos(f, v.min(V.1)))
+        .collect();
+    painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, visuals.selection.stroke.color)));
+}
+
 fn tooltip(ui: &mut egui::Ui, e: &Entry) {
     ui.monospace(format!("File:     {}", e.file.path.display()));
     ui.monospace(format!(
@@ -1767,6 +2196,7 @@ impl eframe::App for TeddyBenchApp {
         self.shortcuts(&ctx, &mut actions);
         self.dialogs(&ctx);
         self.job_window(&ctx);
+        self.tag_operation_window(&ctx);
         self.log_window(&ctx);
 
         for a in actions {

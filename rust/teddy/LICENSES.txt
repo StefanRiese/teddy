@@ -38,6 +38,7 @@ Third-party components (see each project for the full license text):
 
    libopus (via the 'opus' crate)   BSD-3-Clause  https://opus-codec.org/license/
    symphonia                        MPL-2.0       https://github.com/pdeljanov/Symphonia
+   serialport (TeddyBench)          MPL-2.0       https://github.com/serialport/serialport-rs
    rubato                           MIT           https://github.com/HEnquist/rubato
    ogg                              BSD-3-Clause  https://github.com/RustAudio/ogg
    id3                              MIT           https://github.com/polyfloyd/rust-id3

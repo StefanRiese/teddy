@@ -19,6 +19,8 @@ mp3lame-encoder = "0.2.5"
 opus = "0.4.0"
 pdf-writer = "0.15.0"
 rfd = "0.17.2"
+# no libudev: on Linux the ports are found through /sys
+serialport = { version = "4.10.1", default-features = false }
 rodio = "0.23.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
