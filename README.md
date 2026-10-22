@@ -4,7 +4,7 @@
 > **Old C# implementation, no longer maintained.** This branch only keeps the C# TeddyBench and Teddy
 > for reference. There will be no fixes or new releases for it. Everything is done in the Rust
 > implementation now, for Windows, Linux and macOS: see the
-> [`rust-port` branch](https://github.com/StefanRiese/teddy/tree/rust-port) and the `rust-v*` releases on the
+> [`master` branch](https://github.com/StefanRiese/teddy) and the `rust-v*` releases on the
 > [releases page](https://github.com/StefanRiese/teddy/releases). It reads the same settings, custom names
 > and Tonie files.
 
