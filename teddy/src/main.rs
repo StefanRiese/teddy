@@ -88,8 +88,8 @@ fn main() -> ExitCode {
     let mut tonies = match &args.json {
         Some(source) => load_json(&[source.as_str()]),
         None => load_json(&[
-            &format!("https://api.revvox.de/tonies.json?source=Teddy&version={}", env!("CARGO_PKG_VERSION")),
-            tonies::FALLBACK_URL,
+            tonies::V2_URL,
+            &format!("{}?source=Teddy&version={}", tonies::REVVOX_URL, env!("CARGO_PKG_VERSION")),
         ]),
     };
 
@@ -294,8 +294,8 @@ fn mode_decode(args: &Args, tonies: &[TonieData]) -> bool {
 
         let hash = tonie.hash_string();
         let mut tags = vec![format!("TeddyVersion={VERSION}"), format!("TeddyFile={}", file.display())];
-        let info = tonies::find_by_hash(tonies, &hash);
-        if let Some(info) = info {
+        let info = tonies::find_for_file(tonies, &hash, tonie.header.audio_chapters.len());
+        if let Some(info) = &info {
             tags.push(format!("ALBUM={}", info.title()));
             tags.push(format!("ARTIST={}", info.series.as_deref().unwrap_or("")));
             tags.push(format!("LANGUAGE={}", info.language.as_deref().unwrap_or("")));
@@ -314,7 +314,8 @@ fn mode_decode(args: &Args, tonies: &[TonieData]) -> bool {
         }
 
         let name = format!("{}-{:08X}", file.file_name().unwrap().to_string_lossy(), tonie.header.audio_id);
-        if let Err(e) = tonie.dump_audio_files(&out_dir, &name, args.single, &tags, info.map(|i| i.tracks.as_slice())) {
+        let titles = info.as_ref().and_then(|i| i.track_names(tonie.header.audio_chapters.len()));
+        if let Err(e) = tonie.dump_audio_files(&out_dir, &name, args.single, &tags, titles) {
             ok = false;
             println!("[ERROR] Failed to write .ogg/.cue'");
             println!("   Message:    {e}");

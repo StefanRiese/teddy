@@ -217,7 +217,7 @@ fn export_one(item: &ExportItem, options: &ExportOptions, data_dir: &DataDir, st
         tags.push(format!("LANGUAGE={}", info.language.as_deref().unwrap_or("")));
     }
     tags.push(format!("HASH={hash}"));
-    let titles = item.info.as_ref().map(|i| i.tracks.as_slice());
+    let titles = item.info.as_ref().and_then(|i| i.track_names(tonie.header.audio_chapters.len()));
 
     let oggs = tonie.dump_audio_files(&dir, "", false, &tags, titles).map_err(|e| e.to_string())?;
     if cancelled() {
@@ -306,7 +306,7 @@ pub fn ogg_to_mp3(ogg: &Path, mp3: &Path, track_count: usize, info: Option<&Toni
     let mut tag = id3::Tag::new();
     let number = track_number(ogg);
     let title = number
-        .and_then(|n| info.and_then(|i| i.tracks.get(n - 1)))
+        .and_then(|n| info.and_then(|i| i.track_names(track_count)).and_then(|t| t.get(n - 1)))
         .cloned()
         .unwrap_or_else(|| ogg.file_stem().unwrap_or_default().to_string_lossy().to_string());
     tag.set_title(title);

@@ -3,6 +3,18 @@
 Releases are tagged `rust-v<version>`. The former C# TeddyBench (`v1.x` releases) is kept in the
 `csharp-backup` branch.
 
+## Unreleased
+
+- Tonie names, tracks and covers come from `toniesV2.json` of the
+  [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) repository on GitHub; `tonies.json`
+  from api.revvox.de is only used if GitHub fails. Files in the old format still work, e.g. with `teddy -j` or
+  a `tonies.json` edited by hand. Titles of Tonies without an episode no longer end in " - None".
+- Track names are only used when their number matches the tracks of the file. A re-release often has
+  another number of tracks than the version the names were written for; its tracks were named wrongly by
+  position in exports, the Edit tracks dialog and `teddy -m decode`. Fitting names are also looked for in
+  other entries with the same audio or the same series and episode. The details say when the names belong
+  to another version.
+
 ## 0.1.5 – 2026-10-22
 
 TeddyBench now runs on Windows, Linux and macOS as the only implementation; the C# version is no longer

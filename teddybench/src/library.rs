@@ -142,7 +142,7 @@ impl TonieDb {
         let custom = self.custom_names.get(&analysis.hash);
         let unknown = format!("[{uid}]\n(unknown: {:08X})", analysis.audio_id);
 
-        if let Some(info) = tonies::find_by_hash(&self.tonies, &analysis.hash) {
+        if let Some(info) = tonies::find_for_file(&self.tonies, &analysis.hash, analysis.chapters.len()) {
             let mut name = info.title().to_string();
             if let Some(model) = info.model.as_deref().filter(|m| !m.is_empty()) {
                 name = format!("{model} - {name}");
@@ -150,7 +150,7 @@ impl TonieDb {
             return Resolved {
                 name: custom.cloned().unwrap_or(name),
                 kind: Kind::Retail,
-                info: Some(info.clone()),
+                info: Some(info),
             };
         }
 

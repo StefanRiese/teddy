@@ -42,8 +42,9 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
 
 ### Features
 
-- Cover grid with names and covers from `tonies.json` ([api.revvox.de](https://api.revvox.de/tonies.json), or
-  the copy in [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) if that fails)
+- Cover grid with names and covers from `toniesV2.json` of the
+  [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) repository (`tonies.json` from
+  [api.revvox.de](https://api.revvox.de/tonies.json) if GitHub fails)
   and your own names from `customTonies.json`; icon size slider, sorting by UID, product number, date or type.
 - **Search** by name, UID, folder or audio ID: start typing anywhere, Esc clears the search. Only the
   Tonies found stay selected, so actions never affect hidden ones.
@@ -116,7 +117,7 @@ need to be entered.
 
 ### Data files and settings
 
-`teddyBench.cfg`, `tonies.json`, `customTonies.json` and the image cache (`cache/`) are kept next to the
+`teddyBench.cfg`, `toniesV2.json` / `tonies.json`, `customTonies.json` and the image cache (`cache/`) are kept next to the
 program; in the macOS app inside `TeddyBench.app/Contents/Data`. If that location is read-only (e.g.
 `Program Files`, or macOS running a downloaded app before it was moved to Applications), the user's data
 directory is used instead: `%APPDATA%\TeddyBench\data` on Windows, `~/Library/Application Support/TeddyBench`
@@ -132,7 +133,7 @@ The settings are JSON; most of them can be changed in the menus. Edit the file w
 | `NfcEnabled` | `false` | Enable the NFC reader. |
 | `NfcType` | `"Proxmark3"` | NFC reader type: `"Proxmark3"` or `"Pn5180Esp"`. |
 | `DebugWindow` | `false` | Show the debug window. |
-| `DownloadJson` | `true` | Download `tonies.json` on startup. Set to `false` to keep a locally modified `tonies.json` (it is still downloaded if missing). |
+| `DownloadJson` | `true` | Download `toniesV2.json` on startup. Set to `false` to keep a locally modified file: of `toniesV2.json` and `tonies.json` (old format), the one changed last is used. If neither exists, it is still downloaded. |
 | `CacheImageSize` | `256` | Resolution of cached cover images in pixels. |
 | `IconSize` | `128` | Size of the covers in the grid, in pixels. |
 | `SortBy` | `"Date"` | Sort order: `"UID"`, `"Product"`, `"Date"` or `"Type"`. |
@@ -165,7 +166,7 @@ teddy -m rename [-y] [-d] <source dir> <dest dir>
 | `-y` | rename: actually rename files (otherwise dry run) |
 | `-d` | rename: delete duplicates |
 | `-w`, `--write` | info: write updated JSON to a local file |
-| `-j`, `--json` | JSON file/URL with details about Tonies (default: downloaded from api.revvox.de, or from GitHub if that fails) |
+| `-j`, `--json` | `tonies.json` or `toniesV2.json` file/URL with details about Tonies (default: `toniesV2.json` from GitHub, `tonies.json` from api.revvox.de if that fails) |
 | `-f`, `--format` | Output details as `csv`, `json` or `text` |
 | `-v` | Increase debug verbosity |
 | `-h`, `--help` | Show help |
@@ -233,6 +234,8 @@ Intentional fixes:
 - More input formats: MP3, Ogg Opus, Ogg Vorbis, FLAC, WAV and M4A (Teddy.exe: MP3 and Ogg).
 - The tag backside PDF is saved as `CustomTagBacksideFilename`; the C# version overwrote the cover PDF.
 - Removing a tag from an ESP with PN5180 deselects its Tonie again, like with a Proxmark3.
+- Track names from `tonies.json` are only used when their number matches the tracks of the file; Teddy.exe
+  assigned them by position, so the tracks of a re-release with other tracks got wrong names.
 
 Other differences:
 

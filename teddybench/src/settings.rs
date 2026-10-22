@@ -197,8 +197,14 @@ impl DataDir {
         self.0.join(SETTINGS_FILE)
     }
 
+    /// tonies.json as downloaded from api.revvox.de, or edited by the user
     pub fn tonies_json(&self) -> PathBuf {
         self.0.join("tonies.json")
+    }
+
+    /// toniesV2.json as downloaded from the tonies-json repository
+    pub fn tonies_v2_json(&self) -> PathBuf {
+        self.0.join("toniesV2.json")
     }
 
     pub fn custom_tonies_json(&self) -> PathBuf {

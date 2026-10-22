@@ -832,7 +832,12 @@ impl TeddyBenchApp {
             Action::EditTracks => {
                 if let Some(e) = self.single_selected() {
                     let path = e.file.path.clone();
-                    let titles = e.info().map(|i| i.tracks.clone()).unwrap_or_default();
+                    let titles = e
+                        .info()
+                        .zip(e.analysis())
+                        .and_then(|(i, a)| i.track_names(a.chapters.len()))
+                        .map(<[String]>::to_vec)
+                        .unwrap_or_default();
                     match tonie_core::TonieFile::open(&path, false) {
                         Ok(t) => {
                             let chapters = &t.header.audio_chapters;
@@ -2954,9 +2959,20 @@ fn details(ui: &mut egui::Ui, e: &Entry) {
             None => row("", "reading...".into()),
         }
     });
-    if let Some(info) = e.info() {
+    if let (Some(info), Some(a)) = (e.info(), e.analysis()) {
         if !info.tracks.is_empty() {
             ui.add_space(6.0);
+            if info.track_names(a.chapters.len()).is_none() {
+                /* e.g. a re-release with other tracks than the version the names are for */
+                ui.label(
+                    egui::RichText::new(format!(
+                        "The track names in tonies.json are for another version of this Tonie ({} names, this file has {} tracks):",
+                        info.tracks.len(),
+                        a.chapters.len()
+                    ))
+                    .weak(),
+                );
+            }
             egui::ScrollArea::vertical().id_salt("tracks").show(ui, |ui| {
                 for (i, t) in info.tracks.iter().enumerate() {
                     ui.label(format!("{:>2}. {t}", i + 1));
