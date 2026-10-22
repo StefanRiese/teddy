@@ -79,6 +79,8 @@ pub struct TonieOggWriter<E: FrameEncoder, W: Write> {
     page_counter: u32,
     serial: u32,
     granule: u64,
+    /// Start and length of each packet in the payload of the current page
+    packets: Vec<(usize, usize)>,
     finished: bool,
     /// Messages for the user, collected until [`TonieOggWriter::take_warnings`] is called
     warnings: Vec<String>,
@@ -100,6 +102,7 @@ impl<E: FrameEncoder, W: Write> TonieOggWriter<E, W> {
             page_counter: 0,
             serial,
             granule: 0,
+            packets: Vec::new(),
             finished: false,
             warnings: Vec::new(),
         };
@@ -147,7 +150,8 @@ impl<E: FrameEncoder, W: Write> TonieOggWriter<E, W> {
         Ok(())
     }
 
-    fn encode_frame(&mut self) -> Result<(), Error> {
+    /// The size the current page has to reach, and the largest packet that still fits into it.
+    fn space(&self) -> (i32, i32) {
         let max_block_size: i32 = if self.position < BLOCK_SIZE as u64 {
             (BLOCK_SIZE - 0x200) as i32
         } else {
@@ -166,7 +170,11 @@ impl<E: FrameEncoder, W: Write> TonieOggWriter<E, W> {
             max_payload -= 64;
         }
         let lacing_space = (255 - i32::from(self.lacing_count)) * 255;
-        let mut max_opus_data = lacing_space.min(max_payload);
+        (max_block_size, lacing_space.min(max_payload))
+    }
+
+    fn encode_frame(&mut self) -> Result<(), Error> {
+        let (max_block_size, mut max_opus_data) = self.space();
         if max_opus_data <= 0 {
             return Err(Error::Encoder(format!("no space left in Ogg page at offset 0x{:08X}", self.position)));
         }
@@ -195,6 +203,7 @@ impl<E: FrameEncoder, W: Write> TonieOggWriter<E, W> {
         }
 
         self.payload_index += packet_size;
+        self.packets.push((start, packet_size));
 
         /* Opus granules are measured in 48 kHz samples, the frame size is fixed */
         self.granule += FRAME_SAMPLES as u64;
@@ -218,6 +227,139 @@ impl<E: FrameEncoder, W: Write> TonieOggWriter<E, W> {
             self.finalize_page()?;
         }
         Ok(())
+    }
+
+    /// Appends an already encoded Opus packet, e.g. copied from another Tonie file. A frame that
+    /// was started by [`TonieOggWriter::write_samples`] is completed with silence first.
+    pub fn write_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        if self.finished {
+            return Err(Error::Encoder("stream already finished".into()));
+        }
+        self.complete_frame()?;
+        let samples = opus::packet::get_nb_samples(packet, SAMPLE_RATE).map_err(|e| Error::Encoder(format!("invalid Opus packet: {e}")))?;
+
+        if self.space().1 < packet.len() as i32 {
+            self.close_page()?;
+        }
+        if self.space().1 < packet.len() as i32 {
+            return Err(Error::Encoder(format!("Opus packet of {} bytes does not fit into a page", packet.len())));
+        }
+        let start = self.payload_index;
+        self.payload[start..start + packet.len()].copy_from_slice(packet);
+        self.payload_index += packet.len();
+        self.packets.push((start, packet.len()));
+        let mut segment_length = packet.len();
+        while segment_length >= 255 {
+            segment_length -= 255;
+            self.push_lacing(0xFF);
+        }
+        self.push_lacing(segment_length as u8);
+        self.granule += samples as u64;
+
+        let (max_block_size, _) = self.space();
+        let remain = max_block_size - self.payload_index as i32 - self.header_index as i32;
+        if self.lacing_count >= 248 || remain < 64 {
+            self.close_page()?;
+        }
+        Ok(())
+    }
+
+    /// Encodes a frame that was started by [`TonieOggWriter::write_samples`], completed with silence.
+    pub fn complete_frame(&mut self) -> Result<(), Error> {
+        if self.frame_index > 0 {
+            let missing = self.frame.len() - self.frame_index;
+            self.write_samples(&vec![0; missing])?;
+        }
+        Ok(())
+    }
+
+    /// Ends the current page exactly at the block boundary by padding its last packets, so the
+    /// next packet starts a new page.
+    pub fn close_page(&mut self) -> Result<(), Error> {
+        if self.lacing_count == 0 {
+            return Ok(());
+        }
+        let (target, _) = self.space();
+        let missing = target - (self.header_index + self.payload_index) as i32;
+        if missing > 0 {
+            self.pad_page(missing as usize)?;
+        }
+        self.finalize_page()
+    }
+
+    /// Grows the page by `missing` bytes, padding the last one or two packets. A packet growing past
+    /// a multiple of 255 bytes needs another lacing value, so not every size can be reached with one.
+    fn pad_page(&mut self, missing: usize) -> Result<(), Error> {
+        let mut packets: Vec<Vec<u8>> = self.packets.iter().map(|&(s, l)| self.payload[s..s + l].to_vec()).collect();
+        let n = packets.len();
+        let lacing = |len: usize| len / 255 + 1;
+        let growth = |len: usize, x: usize| x + lacing(len + x) - lacing(len);
+        let padded = |p: &[u8], x: usize| -> Option<Vec<u8>> {
+            if x == 0 {
+                return Some(p.to_vec());
+            }
+            let mut buf = p.to_vec();
+            buf.resize(p.len() + x, 0);
+            opus::packet::pad(&mut buf, p.len()).ok().map(|_| buf)
+        };
+
+        let mut found = None;
+        'search: for x2 in 0..=missing {
+            let g2 = match x2 {
+                0 => 0,
+                _ if n < 2 => break,
+                _ => growth(packets[n - 2].len(), x2),
+            };
+            if g2 > missing {
+                break;
+            }
+            let rest = missing - g2;
+            let last = packets[n - 1].len();
+            for x1 in rest.saturating_sub(32)..=rest {
+                if growth(last, x1) != rest {
+                    continue;
+                }
+                let second = if x2 > 0 { padded(&packets[n - 2], x2) } else { None };
+                if x2 > 0 && second.is_none() {
+                    continue;
+                }
+                if let Some(first) = padded(&packets[n - 1], x1) {
+                    found = Some((first, second));
+                    break 'search;
+                }
+            }
+        }
+        let Some((last, second)) = found else {
+            return Err(Error::Padding(format!("Failed to pad the Ogg page at offset 0x{:08X}", self.position)));
+        };
+        packets[n - 1] = last;
+        if let Some(second) = second {
+            packets[n - 2] = second;
+        }
+
+        /* lay out the page again */
+        self.header_index = 27;
+        self.payload_index = 0;
+        self.lacing_count = 0;
+        self.packets.clear();
+        for p in &packets {
+            let start = self.payload_index;
+            self.payload[start..start + p.len()].copy_from_slice(p);
+            self.payload_index += p.len();
+            self.packets.push((start, p.len()));
+            let mut segment_length = p.len();
+            while segment_length >= 255 {
+                segment_length -= 255;
+                self.push_lacing(0xFF);
+            }
+            self.push_lacing(segment_length as u8);
+        }
+        Ok(())
+    }
+
+    /// Number of the page being filled
+    pub fn current_page(&self) -> u32 {
+        self.page_counter - 1
     }
 
     fn push_lacing(&mut self, value: u8) {
@@ -298,6 +440,7 @@ impl<E: FrameEncoder, W: Write> TonieOggWriter<E, W> {
         self.header_index = 0;
         self.payload_index = 0;
         self.lacing_count = 0;
+        self.packets.clear();
 
         let h = &mut self.header;
         h[0..4].copy_from_slice(b"OggS");

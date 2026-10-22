@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use id3::TagLike;
-use tonie_core::encode::{EncodeOptions, EncodeProgress};
+use tonie_core::encode::{EncodeOptions, EncodeProgress, TrackSource};
 use tonie_core::TonieFile;
 
 use crate::export::JobStatus;
@@ -109,6 +109,49 @@ pub fn encode_tonie(files: &[PathBuf], uid: &str, audio_id: u32, content_dir: &P
     temp.persist(&target)
         .map_err(|e| format!("Failed to write file '{}': {}", target.display(), e.error))?;
     Ok(target)
+}
+
+/// A track of an edited Tonie: one it already has (by index), or an audio file to add
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditTrack {
+    Existing(usize),
+    File(PathBuf),
+}
+
+/// Rewrites a Tonie with tracks added, removed or reordered. The tracks it keeps are copied
+/// without re-encoding, new files are encoded; the audio ID stays the same.
+pub fn edit_tonie(file: &Path, tracks: &[EditTrack], status: &JobStatus) -> Result<(), String> {
+    let tonie = TonieFile::open(file, true).map_err(|e| format!("Cannot read '{}': {e}", file.display()))?;
+    let packets = tonie
+        .track_packets()
+        .map_err(|e| format!("Cannot read the tracks of '{}': {e}", file.display()))?;
+    let sources = tracks
+        .iter()
+        .map(|t| match t {
+            EditTrack::Existing(i) => packets
+                .get(*i)
+                .map(|p| TrackSource::Packets {
+                    label: format!("Track {} of the Tonie", i + 1),
+                    packets: p.clone(),
+                })
+                .ok_or_else(|| format!("The Tonie has no track {}", i + 1)),
+            EditTrack::File(f) => Ok(TrackSource::File(f.clone())),
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if sources.is_empty() {
+        return Err("A Tonie needs at least one track.".into());
+    }
+
+    let mut progress = JobProgress { status, line: String::new() };
+    let options = EncodeOptions {
+        audio_id: tonie.header.audio_id,
+        ..Default::default()
+    };
+    let dir = file.parent().unwrap_or(Path::new("."));
+    let mut temp = tempfile_in(dir)?;
+    tonie_core::encode::build(&sources, &options, temp.as_file_mut(), &mut progress).map_err(|e| format!("Failed to write the Tonie: {e}"))?;
+    temp.persist(file)
+        .map_err(|e| format!("Failed to write file '{}': {}", file.display(), e.error))
 }
 
 fn tempfile_in(dir: &Path) -> Result<TempFile, String> {
@@ -293,6 +336,37 @@ mod tests {
         /* no temporary file left */
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
         assert!(change_audio_id(&dir.path().join("missing"), 1).is_err());
+    }
+
+    #[test]
+    fn edits_the_tracks_of_a_tonie() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("500304E0");
+        std::fs::copy(fixtures().join("reference/album_cbr96/0A0B0C01/500304E0"), &file).unwrap();
+        let before = TonieFile::open(&file, true).unwrap();
+        let old = before.track_packets().unwrap();
+
+        let status = JobStatus::default();
+        let tracks = [
+            EditTrack::Existing(2),
+            EditTrack::Existing(0),
+            EditTrack::File(fixtures().join("inputs/silence.mp3")),
+        ];
+        edit_tonie(&file, &tracks, &status).unwrap();
+
+        let after = TonieFile::open(&file, true).unwrap();
+        assert!(after.hash_correct);
+        assert_eq!(after.header.audio_id, before.header.audio_id);
+        assert_eq!(after.header.audio_chapters.len(), 3);
+        let new = after.track_packets().unwrap();
+        assert_eq!(new[0], old[2]);
+        assert_eq!(new[1], old[0]);
+        /* only the Tonie file is left */
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+        assert!(edit_tonie(&file, &[EditTrack::Existing(7)], &status).is_err());
+        assert!(edit_tonie(&file, &[], &status).is_err());
+        assert_eq!(TonieFile::open(&file, true).unwrap().header.hash, after.header.hash);
     }
 
     #[test]

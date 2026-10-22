@@ -149,6 +149,35 @@ pub fn encode_with<E: FrameEncoder, W: Write + Seek>(
     out: &mut W,
     progress: &mut dyn EncodeProgress,
 ) -> Result<FileHeader, Error> {
+    let tracks: Vec<TrackSource> = files.iter().cloned().map(TrackSource::File).collect();
+    build_with(encoder, &tracks, options, out, progress)
+}
+
+/// A track of a Tonie file being built
+#[derive(Clone, Debug)]
+pub enum TrackSource {
+    /// An audio file to encode
+    File(PathBuf),
+    /// Opus packets copied from a Tonie file (see [`crate::TonieFile::track_packets`]), not re-encoded.
+    /// `label` is shown in the progress.
+    Packets { label: String, packets: Vec<Vec<u8>> },
+}
+
+/// Builds a Tonie file from encoded audio files and tracks copied from other Tonie files, e.g. to
+/// add, remove or reorder the tracks of a Tonie without re-encoding the tracks it keeps. A copied
+/// track starts on a new page, so its chapter starts exactly where the track does.
+pub fn build<W: Write + Seek>(tracks: &[TrackSource], options: &EncodeOptions, out: &mut W, progress: &mut dyn EncodeProgress) -> Result<FileHeader, Error> {
+    let encoder = opus_encoder(options.bitrate, options.vbr)?;
+    build_with(encoder, tracks, options, out, progress)
+}
+
+fn build_with<E: FrameEncoder, W: Write + Seek>(
+    encoder: E,
+    tracks: &[TrackSource],
+    options: &EncodeOptions,
+    out: &mut W,
+    progress: &mut dyn EncodeProgress,
+) -> Result<FileHeader, Error> {
     let audio_id = if options.audio_id == 0 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -173,17 +202,35 @@ pub fn encode_with<E: FrameEncoder, W: Write + Seek>(
     let mut last_index = 0u32;
     let mut warned = false;
 
-    for (index, file) in files.iter().enumerate() {
+    for (index, source) in tracks.iter().enumerate() {
         let track = index + 1;
         if writer.position() + BLOCK_SIZE as u64 >= MAX_SIZE {
             progress.warning("Close to 2 GiB, stopping");
             break;
         }
 
-        chapters.push(last_index);
-        progress.file_start(track, file);
-
-        let result = encode_track(&mut writer, track, file, options, &mut last_index, progress);
+        let after_copy = index > 0 && matches!(tracks[index - 1], TrackSource::Packets { .. });
+        let result = match source {
+            TrackSource::File(file) => {
+                if after_copy {
+                    /* don't put the start of the track into the last page of the copied one */
+                    writer.close_page()?;
+                    chapters.push(writer.current_page());
+                } else {
+                    chapters.push(last_index);
+                }
+                progress.file_start(track, file);
+                encode_track(&mut writer, track, file, options, &mut last_index, progress)
+            }
+            TrackSource::Packets { label, packets } => {
+                progress.file_start(track, Path::new(label));
+                copy_track(&mut writer, packets, &mut chapters, &mut last_index)
+            }
+        };
+        let file = match source {
+            TrackSource::File(file) => file.as_path(),
+            TrackSource::Packets { label, .. } => Path::new(label),
+        };
         for w in writer.take_warnings() {
             progress.warning(&w);
         }
@@ -228,6 +275,25 @@ pub fn encode_with<E: FrameEncoder, W: Write + Seek>(
     out.seek(SeekFrom::End(0))?;
     out.flush()?;
     Ok(header)
+}
+
+/// Appends copied packets as a track that starts on a new page.
+fn copy_track<E: FrameEncoder, W: Write>(
+    writer: &mut TonieOggWriter<E, W>,
+    packets: &[Vec<u8>],
+    chapters: &mut Vec<u32>,
+    last_index: &mut u32,
+) -> Result<(), Error> {
+    /* the rest of the previous track belongs to its pages */
+    writer.complete_frame()?;
+    writer.close_page()?;
+    /* the first chapter is always 0, the header pages belong to it */
+    chapters.push(if chapters.is_empty() { 0 } else { writer.current_page() });
+    for p in packets {
+        writer.write_packet(p)?;
+    }
+    *last_index = writer.page_counter();
+    Ok(())
 }
 
 fn encode_track<E: FrameEncoder, W: Write>(
@@ -298,5 +364,78 @@ impl Chunker {
         self.buf.clear();
         *last_index = writer.page_counter();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::*;
+    use crate::ogg::Page;
+    use crate::TonieFile;
+
+    fn fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures")
+    }
+
+    #[test]
+    fn rebuilds_a_tonie_without_reencoding_its_tracks() {
+        let original = TonieFile::open(fixtures().join("reference/album_cbr96/0A0B0C01/500304E0"), true).unwrap();
+        let tracks = original.track_packets().unwrap();
+        assert_eq!(tracks.len(), 3);
+        assert!(tracks.iter().all(|t| !t.is_empty()));
+
+        /* a new track first, then the old ones in another order */
+        let copy = |i: usize| TrackSource::Packets {
+            label: format!("Track {}", i + 1),
+            packets: tracks[i].clone(),
+        };
+        let sources = vec![TrackSource::File(fixtures().join("inputs/silence.mp3")), copy(2), copy(0), copy(1)];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("500304E0");
+        let mut out = std::fs::File::create(&path).unwrap();
+        let options = EncodeOptions {
+            audio_id: 0x1234,
+            ..Default::default()
+        };
+        build(&sources, &options, &mut out, &mut ()).unwrap();
+        drop(out);
+
+        let rebuilt = TonieFile::open(&path, true).unwrap();
+        assert!(rebuilt.hash_correct);
+        assert_eq!(rebuilt.header.audio_id, 0x1234);
+        assert_eq!(rebuilt.header.audio_chapters.len(), 4);
+        assert!(rebuilt.statistics.errors.is_empty(), "{:?}", rebuilt.statistics.errors);
+
+        /* the copied tracks are unchanged, the last one gets the closing silent frame */
+        let got = rebuilt.track_packets().unwrap();
+        assert_eq!(got[1], tracks[2]);
+        assert_eq!(got[2], tracks[0]);
+        assert!(got[3].starts_with(&tracks[1]) && got[3].len() <= tracks[1].len() + 2);
+
+        /* every audio page but the last ends at a 4 KiB boundary, granules grow */
+        let mut offset = 0;
+        let mut granule = 0;
+        while let Some((page, size)) = Page::parse(&rebuilt.audio, offset) {
+            offset += size;
+            assert!(page.granule_position >= granule);
+            granule = page.granule_position;
+            /* the small header pages share the first block with the first audio page */
+            if offset < rebuilt.audio.len() && !page.is_opus_header() {
+                assert_eq!(
+                    (BLOCK_SIZE + offset) % BLOCK_SIZE,
+                    0,
+                    "page {} ends at 0x{:X}",
+                    page.sequence,
+                    BLOCK_SIZE + offset
+                );
+            }
+        }
+        assert_eq!(offset, rebuilt.audio.len());
+        assert_ne!((BLOCK_SIZE + offset) % BLOCK_SIZE, 0, "the file must not end at a block boundary");
+
+        /* the length: the new track plus the copied ones */
+        let samples = |t: &Vec<Vec<u8>>| t.iter().map(|p| opus::packet::get_nb_samples(p, 48000).unwrap() as u64).sum::<u64>();
+        let copied: u64 = tracks.iter().map(samples).sum();
+        assert!(rebuilt.statistics.highest_granule > copied);
     }
 }

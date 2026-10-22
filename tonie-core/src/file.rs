@@ -124,6 +124,43 @@ impl TonieFile {
         Ok(out)
     }
 
+    /// The Opus packets of each track (chapter), without the padding the writer added to fill the
+    /// pages. A packet belongs to the track of the page it ends in, like the Toniebox jumps to the
+    /// first page of a chapter. Needs the audio (`open(.., true)`).
+    pub fn track_packets(&self) -> Result<Vec<Vec<Vec<u8>>>, Error> {
+        let data = &self.audio;
+        let chapters = &self.header.audio_chapters;
+        let mut tracks: Vec<Vec<Vec<u8>>> = vec![Vec::new(); chapters.len().max(1)];
+        let mut packet = Vec::new();
+        let mut offset = 0;
+        while offset < data.len() {
+            let bad = || Error::InvalidFile(format!("no Ogg page at offset 0x{:X}", BLOCK_SIZE + offset));
+            let hdr = data.get(offset..offset + PAGE_HEADER_LEN).filter(|h| &h[0..4] == b"OggS").ok_or_else(bad)?;
+            let sequence = u32::from_le_bytes(hdr[18..22].try_into().unwrap());
+            let segments = hdr[26] as usize;
+            let table = data.get(offset + PAGE_HEADER_LEN..offset + PAGE_HEADER_LEN + segments).ok_or_else(bad)?;
+            let mut pos = offset + PAGE_HEADER_LEN + segments;
+            for &lacing in table {
+                packet.extend_from_slice(data.get(pos..pos + lacing as usize).ok_or_else(bad)?);
+                pos += lacing as usize;
+                if lacing == 255 {
+                    continue;
+                }
+                let mut p = std::mem::take(&mut packet);
+                if p.starts_with(b"OpusHead") || p.starts_with(b"OpusTags") {
+                    continue;
+                }
+                if let Ok(len) = opus::packet::unpad(&mut p) {
+                    p.truncate(len);
+                }
+                let track = chapters.iter().rposition(|&c| c <= sequence).unwrap_or(0);
+                tracks[track].push(p);
+            }
+            offset = pos;
+        }
+        Ok(tracks)
+    }
+
     /// The OpusHead/OpusTags pages at the start of the audio.
     fn opus_header_pages(&self) -> Result<(Vec<Page>, usize), Error> {
         let mut pages = Vec::new();

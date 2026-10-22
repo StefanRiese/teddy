@@ -174,6 +174,15 @@ enum Dialog {
     Antenna(Measurement),
     Trashcan(TrashView),
     AudioId(AudioIdDraft),
+    EditTracks(EditTracksDraft),
+}
+
+/// Adding, removing and reordering the tracks of a Tonie
+struct EditTracksDraft {
+    path: PathBuf,
+    /// The track and how it is shown: title, length
+    rows: Vec<(actions::EditTrack, String, String)>,
+    selected: Option<usize>,
 }
 
 /// Changing the audio ID of a Tonie
@@ -251,6 +260,7 @@ enum Action {
     Trashcan,
     Shortcuts,
     ChangeAudioId,
+    EditTracks,
     /// Select the next Tonie in the direction of the arrow key, or the first/last one
     Move(egui::Key),
     Rename,
@@ -798,6 +808,33 @@ impl TeddyBenchApp {
                 self.scanner.send(Command::Rescan);
             }
             Action::Shortcuts => self.dialog = Some(Dialog::Shortcuts),
+            Action::EditTracks => {
+                if let Some(e) = self.single_selected() {
+                    let path = e.file.path.clone();
+                    let titles = e.info().map(|i| i.tracks.clone()).unwrap_or_default();
+                    match tonie_core::TonieFile::open(&path, false) {
+                        Ok(t) => {
+                            let chapters = &t.header.audio_chapters;
+                            /* a chapter ends where the next one starts */
+                            let granule_before = |page: u32| if page == 0 { Some(0) } else { t.granule_by_page(page - 1) };
+                            let rows = (0..chapters.len())
+                                .map(|i| {
+                                    let start = granule_before(chapters[i]).unwrap_or(0);
+                                    let end = chapters.get(i + 1).and_then(|&c| granule_before(c)).unwrap_or(t.statistics.highest_granule);
+                                    let title = titles.get(i).cloned().unwrap_or_else(|| format!("Track {}", i + 1));
+                                    (
+                                        actions::EditTrack::Existing(i),
+                                        title,
+                                        format_time(Duration::from_secs_f64(end.saturating_sub(start) as f64 / 48000.0)),
+                                    )
+                                })
+                                .collect();
+                            self.dialog = Some(Dialog::EditTracks(EditTracksDraft { path, rows, selected: None }));
+                        }
+                        Err(err) => self.message("Edit tracks", format!("Cannot read '{}': {err}", path.display())),
+                    }
+                }
+            }
             Action::ChangeAudioId => {
                 if let Some(e) = self.single_selected() {
                     match e.analysis() {
@@ -1544,6 +1581,7 @@ impl TeddyBenchApp {
             item(ui, single, "Assign new UID", || Action::AssignUid);
             item(ui, single, "Assign random UID", || Action::RandomUid);
             item(ui, single, "Change audio ID...", || Action::ChangeAudioId);
+            item(ui, single, "Edit tracks...", || Action::EditTracks);
             item(ui, single, "Show in file manager", || Action::ShowInFolder);
             ui.separator();
             item(ui, true, "Export to .ogg", || Action::Export(ExportFormat::Ogg));
@@ -1604,6 +1642,94 @@ impl TeddyBenchApp {
                     ui.button("OK").clicked()
                 });
                 keep = !(r.inner || r.should_close());
+            }
+            Dialog::EditTracks(d) => {
+                let r = egui::Modal::new(Id::unique("edit_tracks")).show(ctx, |ui| {
+                    ui.set_width(620.0);
+                    ui.heading("Edit tracks");
+                    ui.label(egui::RichText::new("Tracks the Tonie keeps are copied as they are, without re-encoding; added files are encoded.").weak());
+                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                        egui::Grid::new("edit_track_list").striped(true).num_columns(3).show(ui, |ui| {
+                            for (i, (track, title, length)) in d.rows.iter().enumerate() {
+                                let selected = d.selected == Some(i);
+                                let number = ui.selectable_label(selected, format!("{:>2}", i + 1)).clicked();
+                                let name = ui.selectable_label(selected, title).clicked();
+                                if number || name {
+                                    d.selected = Some(i);
+                                }
+                                ui.label(match track {
+                                    actions::EditTrack::Existing(_) => egui::RichText::new(length).weak(),
+                                    actions::EditTrack::File(_) => egui::RichText::new("new").color(Color32::from_rgb(40, 140, 60)),
+                                });
+                                ui.end_row();
+                            }
+                        });
+                    });
+                    let sel = d.selected;
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(sel.is_some_and(|s| s > 0), egui::Button::new("Up")).clicked() {
+                            let s = sel.unwrap();
+                            d.rows.swap(s, s - 1);
+                            d.selected = Some(s - 1);
+                        }
+                        if ui.add_enabled(sel.is_some_and(|s| s + 1 < d.rows.len()), egui::Button::new("Down")).clicked() {
+                            let s = sel.unwrap();
+                            d.rows.swap(s, s + 1);
+                            d.selected = Some(s + 1);
+                        }
+                        if ui.add_enabled(sel.is_some() && d.rows.len() > 1, egui::Button::new("Remove")).clicked() {
+                            d.rows.remove(sel.unwrap());
+                            d.selected = None;
+                        }
+                        if ui.button("Add files...").clicked() {
+                            if let Some(files) = rfd::FileDialog::new()
+                                .set_title("Audio files to add to the Tonie")
+                                .add_filter("Audio files", tonie_core::audio_in::SUPPORTED_EXTENSIONS)
+                                .pick_files()
+                            {
+                                for f in actions::initial_track_order(files) {
+                                    let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                                    let description = actions::id3_description(&f);
+                                    let title = if description.trim_matches(|c| c == ' ' || c == '-').is_empty() {
+                                        name
+                                    } else {
+                                        format!("{name} {description}")
+                                    };
+                                    d.rows.push((actions::EditTrack::File(f), title, String::new()));
+                                }
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| (ui.button("Save").clicked(), ui.button("Cancel").clicked())).inner
+                });
+                let (save, cancel) = r.inner;
+                keep = !(save || cancel || r.should_close());
+                if save {
+                    let path = d.path.clone();
+                    let tracks: Vec<actions::EditTrack> = d.rows.iter().map(|(t, _, _)| t.clone()).collect();
+                    if self.playing.as_ref() == Some(&path) {
+                        self.stop_playback();
+                    }
+                    /* the hash changes: keep the name */
+                    if let Some(r) = self
+                        .entries
+                        .iter()
+                        .find(|e| e.file.path == path)
+                        .and_then(|e| e.resolved.as_ref())
+                        .filter(|r| r.kind != Kind::Unknown && !r.name.starts_with("Unnamed Teddy"))
+                    {
+                        self.pending_names.insert(path.clone(), r.name.clone());
+                    }
+                    let job = self.start_job("Editing tracks", tracks.len());
+                    std::thread::spawn(move || {
+                        match actions::edit_tonie(&path, &tracks, &job) {
+                            Ok(()) => job.log(format!("Written {}", path.display())),
+                            Err(e) => job.log(e),
+                        }
+                        job.finish();
+                    });
+                }
             }
             Dialog::AudioId(d) => {
                 let parsed = u32::from_str_radix(d.text.trim().trim_start_matches("0x"), 16).ok();
@@ -2795,7 +2921,7 @@ impl eframe::App for TeddyBenchApp {
 #[cfg(debug_assertions)]
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
-    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts|audioid` opens a dialog (`move`: arrow right),
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts|audioid|tracks` opens a dialog (`move`: arrow right),
     /// `TEDDYBENCH_SCREENSHOT_SEARCH=<text>` searches.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some((path, started)) = self.screenshot.clone() else { return };
@@ -2818,6 +2944,7 @@ impl TeddyBenchApp {
                         Ok("shortcuts") => self.apply(Action::Shortcuts, ctx),
                         Ok("move") => self.apply(Action::Move(egui::Key::ArrowRight), ctx),
                         Ok("audioid") => self.apply(Action::ChangeAudioId, ctx),
+                        Ok("tracks") => self.apply(Action::EditTracks, ctx),
                         Ok("layout") => {
                             let s = &self.settings;
                             self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {

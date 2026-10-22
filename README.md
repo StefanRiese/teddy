@@ -52,6 +52,8 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
   several are made within a second.
 - Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
   **Change audio ID** gives a Tonie a new or a chosen audio ID without re-encoding it.
+- **Edit tracks** of an existing Tonie: add audio files, remove or reorder tracks. The tracks it keeps are
+  copied without re-encoding, so they keep their quality; only added files are encoded.
   **Remove all live flags** (Ctrl+L, on macOS Cmd+L) clears the flag of every Tonie on the card at once.
 - **Deleted Tonies (TRASHCAN):** a Toniebox connected to the cloud moves deleted Tonies into the `TRASHCAN`
   folder next to `CONTENT` instead of deleting them. TeddyBench lists them with name, audio ID, length and
