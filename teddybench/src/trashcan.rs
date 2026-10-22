@@ -54,37 +54,65 @@ pub fn scan(trashcan: &Path) -> Vec<TrashItem> {
 
 /// Puts a deleted Tonie back into `content_dir` as the Tonie for `uid` and removes it from the
 /// TRASHCAN. Byte for byte, or with `new_audio_id` as a new Tonie (the audio is not re-encoded).
-pub fn restore(item: &Path, uid: &str, content_dir: &Path, new_audio_id: Option<u32>) -> Result<PathBuf, String> {
+/// A Tonie already on the card for `uid` is only replaced with `replace`; it goes into the TRASHCAN.
+pub fn restore(item: &Path, uid: &str, content_dir: &Path, new_audio_id: Option<u32>, replace: bool) -> Result<PathBuf, String> {
     let target = file_for_uid(content_dir, uid);
-    if target.exists() {
-        return Err(format!("There already is a Tonie for UID {uid} on the card."));
-    }
     let tonie = TonieFile::open(item, new_audio_id.is_some()).map_err(|e| format!("Cannot read '{}': {e}", item.display()))?;
+    let displaced = match (target.exists(), replace) {
+        (false, _) => None,
+        (true, false) => return Err(format!("There already is a Tonie for UID {uid} on the card.")),
+        (true, true) => Some(move_to_trashcan(&target, item.parent().unwrap_or(Path::new(".")))?),
+    };
+    let result = write_restored(item, &tonie, &target, new_audio_id);
+    if let (Err(_), Some(displaced)) = (&result, &displaced) {
+        /* put the replaced Tonie back */
+        std::fs::rename(displaced, &target).ok();
+    }
+    result?;
+
+    /* the restored file is complete, the copy in the TRASHCAN is not needed anymore */
+    delete(item).ok();
+    Ok(target)
+}
+
+/// Moves a Tonie file from the card into the TRASHCAN folder `dir`, with a free 8.3 name.
+fn move_to_trashcan(file: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let folder = file
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let dest = std::iter::once(format!("{folder}.043"))
+        .chain((1..1000).map(|i| format!("TB{i:06}.043")))
+        .map(|n| dir.join(n))
+        .find(|p| !p.exists())
+        .ok_or("No free file name in the TRASHCAN")?;
+    std::fs::rename(file, &dest).map_err(|e| format!("Failed to move '{}' into the TRASHCAN: {e}", file.display()))?;
+    Ok(dest)
+}
+
+fn write_restored(item: &Path, tonie: &TonieFile, target: &Path, new_audio_id: Option<u32>) -> Result<(), String> {
     std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| format!("Failed to create directory: {e}"))?;
 
     let written = match new_audio_id {
         Some(id) => tonie
             .with_audio_id(id)
             .map_err(|e| e.to_string())
-            .and_then(|bytes| std::fs::write(&target, &bytes).map(|_| bytes.len() as u64).map_err(|e| e.to_string())),
-        None => std::fs::copy(item, &target).map_err(|e| e.to_string()),
+            .and_then(|bytes| std::fs::write(target, &bytes).map(|_| bytes.len() as u64).map_err(|e| e.to_string())),
+        None => std::fs::copy(item, target).map_err(|e| e.to_string()),
     };
     let expected = std::fs::metadata(item).map(|m| m.len()).ok();
     match written {
-        Ok(n) if Some(n) == expected => {}
+        Ok(n) if Some(n) == expected => Ok(()),
         Ok(_) => {
-            std::fs::remove_file(&target).ok();
-            return Err(format!("Failed to write '{}': incomplete", target.display()));
+            std::fs::remove_file(target).ok();
+            Err(format!("Failed to write '{}': incomplete", target.display()))
         }
         Err(e) => {
-            std::fs::remove_file(&target).ok();
-            return Err(format!("Failed to write '{}': {e}", target.display()));
+            std::fs::remove_file(target).ok();
+            Err(format!("Failed to write '{}': {e}", target.display()))
         }
     }
-
-    /* the restored file is complete, the copy in the TRASHCAN is not needed anymore */
-    delete(item).ok();
-    Ok(target)
 }
 
 /// Deletes a file from the TRASHCAN, and its folder if that is empty then.
@@ -140,7 +168,7 @@ mod tests {
     fn restores_byte_for_byte() {
         let (_root, content, trash) = card();
         let item = trash.join("E40").join("1A2B3C4D.043");
-        let restored = restore(&item, "E0040350010C0B0A", &content, None).unwrap();
+        let restored = restore(&item, "E0040350010C0B0A", &content, None, false).unwrap();
         assert_eq!(restored, content.join("0A0B0C01").join("500304E0"));
         assert_eq!(std::fs::read(&restored).unwrap(), std::fs::read(sample()).unwrap());
         /* removed from the TRASHCAN, with its empty folder */
@@ -148,15 +176,22 @@ mod tests {
 
         /* the place is taken now */
         let other = trash.join("E41").join("5E6F7A8B.043");
-        assert!(restore(&other, "E0040350010C0B0A", &content, None).is_err());
+        assert!(restore(&other, "E0040350010C0B0A", &content, None, false).is_err());
         assert!(other.exists());
+
+        /* replacing moves the Tonie on the card into the TRASHCAN */
+        let on_card = std::fs::read(&restored).unwrap();
+        restore(&other, "E0040350010C0B0A", &content, Some(0x99), true).unwrap();
+        assert!(!other.exists());
+        assert_eq!(TonieFile::open(&restored, false).unwrap().header.audio_id, 0x99);
+        assert_eq!(std::fs::read(trash.join("E41").join("0A0B0C01.043")).unwrap(), on_card);
     }
 
     #[test]
     fn restores_as_a_new_tonie() {
         let (_root, content, trash) = card();
         let item = trash.join("E41").join("5E6F7A8B.043");
-        let restored = restore(&item, "E004035011223344", &content, Some(0x1234)).unwrap();
+        let restored = restore(&item, "E004035011223344", &content, Some(0x1234), false).unwrap();
         let tonie = TonieFile::open(&restored, true).unwrap();
         assert_eq!(tonie.header.audio_id, 0x1234);
         assert!(tonie.hash_correct);

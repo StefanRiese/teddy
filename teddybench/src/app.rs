@@ -114,8 +114,8 @@ impl Entry {
 
 /// Creating a new Tonie from audio files, or copying a Tonie file
 struct NewTonie {
-    files: Vec<PathBuf>,
-    descriptions: Vec<String>,
+    /// The files and what their tags say about them
+    tracks: Vec<(PathBuf, String)>,
     selected: Option<usize>,
     uid: String,
     custom_audio_id: bool,
@@ -204,6 +204,8 @@ struct TrashView {
     uid: String,
     /// Restore with a new audio ID instead of byte for byte
     as_new: bool,
+    /// Replace a Tonie that already has the UID
+    replace: bool,
     confirm_delete: bool,
     /// Result of the last restore or delete, and whether it failed
     status: Option<(String, bool)>,
@@ -860,18 +862,13 @@ impl TeddyBenchApp {
                     );
                     return;
                 };
-                let (tx, rx) = channel();
-                let ctx = ctx.clone();
-                std::thread::spawn(move || {
-                    tx.send(trashcan::scan(&dir)).ok();
-                    ctx.request_repaint();
-                });
                 self.dialog = Some(Dialog::Trashcan(TrashView {
                     items: None,
-                    rx: Some(rx),
+                    rx: Some(scan_trashcan(ctx, dir)),
                     selected: None,
                     uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFIX.into()),
                     as_new: false,
+                    replace: false,
                     confirm_delete: false,
                     status: None,
                 }));
@@ -1021,18 +1018,19 @@ impl TeddyBenchApp {
             return;
         }
         let files = if copy_tonie_file { files } else { actions::initial_track_order(audio) };
-        let descriptions = files
-            .iter()
-            .map(|f| if copy_tonie_file { String::new() } else { actions::id3_description(f) })
-            .collect();
         let name = if copy_tonie_file {
             String::new()
         } else {
             actions::title_from_tags(&files).unwrap_or_default()
         };
         self.dialog = Some(Dialog::NewTonie(NewTonie {
-            files,
-            descriptions,
+            tracks: files
+                .into_iter()
+                .map(|f| {
+                    let d = if copy_tonie_file { String::new() } else { actions::id3_description(&f) };
+                    (f, d)
+                })
+                .collect(),
             selected: None,
             /* the tag on the reader, if there is one */
             uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFIX.into()),
@@ -1093,6 +1091,9 @@ impl TeddyBenchApp {
             ui.menu_button("File", |ui| {
                 if ui.button("Open directory...").clicked() {
                     actions.push(Action::OpenDirectory);
+                }
+                if ui.add_enabled(self.current_dir.is_some(), egui::Button::new("Refresh (F5)")).clicked() {
+                    self.scanner.send(Command::Rescan);
                 }
                 ui.separator();
                 if ui.button("Exit").clicked() {
@@ -1648,58 +1649,31 @@ impl TeddyBenchApp {
                     ui.set_width(620.0);
                     ui.heading("Edit tracks");
                     ui.label(egui::RichText::new("Tracks the Tonie keeps are copied as they are, without re-encoding; added files are encoded.").weak());
-                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                        egui::Grid::new("edit_track_list").striped(true).num_columns(3).show(ui, |ui| {
-                            for (i, (track, title, length)) in d.rows.iter().enumerate() {
-                                let selected = d.selected == Some(i);
-                                let number = ui.selectable_label(selected, format!("{:>2}", i + 1)).clicked();
-                                let name = ui.selectable_label(selected, title).clicked();
-                                if number || name {
-                                    d.selected = Some(i);
-                                }
-                                ui.label(match track {
-                                    actions::EditTrack::Existing(_) => egui::RichText::new(length).weak(),
-                                    actions::EditTrack::File(_) => egui::RichText::new("new").color(Color32::from_rgb(40, 140, 60)),
-                                });
-                                ui.end_row();
-                            }
-                        });
-                    });
-                    let sel = d.selected;
-                    ui.horizontal(|ui| {
-                        if ui.add_enabled(sel.is_some_and(|s| s > 0), egui::Button::new("Up")).clicked() {
-                            let s = sel.unwrap();
-                            d.rows.swap(s, s - 1);
-                            d.selected = Some(s - 1);
-                        }
-                        if ui.add_enabled(sel.is_some_and(|s| s + 1 < d.rows.len()), egui::Button::new("Down")).clicked() {
-                            let s = sel.unwrap();
-                            d.rows.swap(s, s + 1);
-                            d.selected = Some(s + 1);
-                        }
-                        if ui.add_enabled(sel.is_some() && d.rows.len() > 1, egui::Button::new("Remove")).clicked() {
-                            d.rows.remove(sel.unwrap());
-                            d.selected = None;
-                        }
-                        if ui.button("Add files...").clicked() {
-                            if let Some(files) = rfd::FileDialog::new()
-                                .set_title("Audio files to add to the Tonie")
-                                .add_filter("Audio files", tonie_core::audio_in::SUPPORTED_EXTENSIONS)
-                                .pick_files()
-                            {
-                                for f in actions::initial_track_order(files) {
-                                    let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                                    let description = actions::id3_description(&f);
-                                    let title = if description.trim_matches(|c| c == ' ' || c == '-').is_empty() {
-                                        name
-                                    } else {
-                                        format!("{name} {description}")
-                                    };
-                                    d.rows.push((actions::EditTrack::File(f), title, String::new()));
+                    track_list(
+                        ui,
+                        "edit_tracks",
+                        &mut d.rows,
+                        &mut d.selected,
+                        |(track, title, length)| {
+                            let extra = match track {
+                                actions::EditTrack::Existing(_) => egui::RichText::new(length).weak(),
+                                actions::EditTrack::File(_) => egui::RichText::new("new").color(Color32::from_rgb(40, 140, 60)),
+                            };
+                            (title.clone(), extra)
+                        },
+                        |ui, rows| {
+                            if ui.button("Add files...").clicked() {
+                                if let Some(files) = pick_audio_files() {
+                                    for f in actions::initial_track_order(files) {
+                                        let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                                        let description = actions::id3_description(&f);
+                                        let title = if description.is_empty() { name } else { format!("{name} ({description})") };
+                                        rows.push((actions::EditTrack::File(f), title, String::new()));
+                                    }
                                 }
                             }
-                        }
-                    });
+                        },
+                    );
                     ui.add_space(8.0);
                     ui.horizontal(|ui| (ui.button("Save").clicked(), ui.button("Cancel").clicked())).inner
                 });
@@ -2060,8 +2034,7 @@ impl TeddyBenchApp {
                         self.run_new_tonie(std::mem::replace(
                             nt,
                             NewTonie {
-                                files: Vec::new(),
-                                descriptions: Vec::new(),
+                                tracks: Vec::new(),
                                 selected: None,
                                 uid: String::new(),
                                 custom_audio_id: false,
@@ -2134,7 +2107,7 @@ impl TeddyBenchApp {
             self.pending_names.insert(uid::file_for_uid(&dir, &uid), nt.name.trim().to_string());
         }
         if nt.copy_tonie_file {
-            match actions::copy_tonie(&nt.files[0], &uid, &dir) {
+            match actions::copy_tonie(&nt.tracks[0].0, &uid, &dir) {
                 Ok(_) => self.scanner.send(Command::Rescan),
                 Err(e) => self.message("Add file...", e),
             }
@@ -2145,9 +2118,10 @@ impl TeddyBenchApp {
         } else {
             self.new_custom_audio_id()
         };
-        let job = self.start_job("Encoding", nt.files.len());
+        let files: Vec<PathBuf> = nt.tracks.iter().map(|(f, _)| f.clone()).collect();
+        let job = self.start_job("Encoding", files.len());
         std::thread::spawn(move || {
-            match actions::encode_tonie(&nt.files, &uid, audio_id, &dir, &job) {
+            match actions::encode_tonie(&files, &uid, audio_id, &dir, &job) {
                 Ok(path) => job.log(format!("Written content to {}", path.display())),
                 Err(e) => job.log(e),
             }
@@ -2371,8 +2345,13 @@ impl TeddyBenchApp {
                     "Gives the file a new audio ID, as for a newly created Tonie. The audio is not re-encoded. \
                      Without this, the file is restored byte for byte.",
                 );
+                let taken = uid_ok && self.current_dir.as_ref().is_some_and(|d| uid::file_for_uid(d, &t.uid).exists());
+                if taken {
+                    ui.colored_label(Color32::from_rgb(200, 140, 30), "There already is a Tonie for this UID on the card.");
+                    ui.checkbox(&mut t.replace, "Replace it (it goes into the TRASHCAN)");
+                }
                 ui.horizontal(|ui| {
-                    restore = ui.add_enabled(uid_ok, egui::Button::new("Restore")).clicked();
+                    restore = ui.add_enabled(uid_ok && (!taken || t.replace), egui::Button::new("Restore")).clicked();
                     if t.confirm_delete {
                         ui.label("Delete it for good?");
                         delete = ui.button("Yes, delete").clicked();
@@ -2400,7 +2379,7 @@ impl TeddyBenchApp {
         if let (true, Some(item), Some(dir)) = (restore, &selected, self.current_dir.clone()) {
             let uid = t.uid.to_ascii_uppercase();
             let new_id = if t.as_new { Some(self.new_custom_audio_id()) } else { None };
-            t.status = Some(match trashcan::restore(&item.path, &uid, &dir, new_id) {
+            t.status = Some(match trashcan::restore(&item.path, &uid, &dir, new_id, t.replace) {
                 Ok(_) => {
                     /* a new audio ID changes the hash: keep the name */
                     if let (Some(id), Ok(a)) = (new_id, &item.analysis) {
@@ -2415,6 +2394,13 @@ impl TeddyBenchApp {
                     }
                     self.scanner.send(Command::Rescan);
                     self.remove_trash_item(t);
+                    /* the replaced Tonie is in the TRASHCAN now */
+                    if t.replace {
+                        if let Some(trash) = trashcan::find(&dir) {
+                            t.rx = Some(scan_trashcan(ctx, trash));
+                        }
+                        t.replace = false;
+                    }
                     (format!("Restored as the Tonie for {uid}."), false)
                 }
                 Err(e) => (e, true),
@@ -2474,6 +2460,23 @@ impl TeddyBenchApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        /* audio files dropped onto the window while a new Tonie is put together are added to it */
+        if let Some(Dialog::NewTonie(nt)) = &mut self.dialog {
+            if !nt.copy_tonie_file {
+                let dropped: Vec<PathBuf> = ctx.input(|i| {
+                    i.raw
+                        .dropped_files
+                        .iter()
+                        .map(|f| f.path().to_path_buf())
+                        .filter(|p| tonie_core::audio_in::is_supported(p))
+                        .collect()
+                });
+                nt.tracks.extend(actions::initial_track_order(dropped).into_iter().map(|f| {
+                    let d = actions::id3_description(&f);
+                    (f, d)
+                }));
+            }
+        }
         if self.dialog.is_some() || self.job.is_some() || self.nfc.operation.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
@@ -2492,6 +2495,9 @@ impl TeddyBenchApp {
             }
             if i.key_pressed(egui::Key::F1) {
                 actions.push(Action::Shortcuts);
+            }
+            if i.key_pressed(egui::Key::F5) {
+                self.scanner.send(Command::Rescan);
             }
             if i.key_pressed(egui::Key::Space) {
                 actions.push(if self.playing.is_some() { Action::Stop } else { Action::Play });
@@ -2553,6 +2559,86 @@ impl TeddyBenchApp {
     }
 }
 
+/// Asks for audio files to add as tracks
+fn pick_audio_files() -> Option<Vec<PathBuf>> {
+    rfd::FileDialog::new()
+        .set_title("Audio files to add")
+        .add_filter("Audio files", tonie_core::audio_in::SUPPORTED_EXTENSIONS)
+        .pick_files()
+}
+
+/// The track list of the New Tonie and Edit tracks dialogs: rows can be selected, dragged to another
+/// place, moved with Up/Down and removed. `cells` gives the title and the second column of a row,
+/// `buttons` adds more buttons next to Up/Down/Remove.
+fn track_list<T>(
+    ui: &mut egui::Ui,
+    id: &str,
+    rows: &mut Vec<T>,
+    selected: &mut Option<usize>,
+    cells: impl Fn(&T) -> (String, egui::RichText),
+    buttons: impl FnOnce(&mut egui::Ui, &mut Vec<T>),
+) {
+    let mut moved = None;
+    egui::ScrollArea::vertical().id_salt(id).max_height(260.0).show(ui, |ui| {
+        egui::Grid::new(id).striped(true).num_columns(3).show(ui, |ui| {
+            for (i, row) in rows.iter().enumerate() {
+                let (title, extra) = cells(row);
+                let sel = *selected == Some(i);
+                let number = ui.selectable_label(sel, format!("{:>2}", i + 1));
+                let name = ui.dnd_drag_source(Id::unique((id, i)), i, |ui| ui.selectable_label(sel, title));
+                if number.clicked() || name.inner.clicked() || name.response.drag_started() {
+                    *selected = Some(i);
+                }
+                let target = number.dnd_release_payload::<usize>().or_else(|| name.response.dnd_release_payload::<usize>());
+                if let Some(from) = target {
+                    moved = Some((*from, i));
+                }
+                if name.response.dnd_hover_payload::<usize>().is_some() {
+                    ui.painter()
+                        .hline(name.response.rect.x_range(), name.response.rect.top(), ui.visuals().selection.stroke);
+                }
+                ui.label(extra);
+                ui.end_row();
+            }
+        });
+    });
+    if let Some((from, to)) = moved.filter(|(from, to)| from != to && *from < rows.len()) {
+        let row = rows.remove(from);
+        rows.insert(to, row);
+        *selected = Some(to);
+    }
+    ui.label(egui::RichText::new("Drag a track to another place to move it.").weak().small());
+    ui.horizontal(|ui| {
+        let sel = selected.filter(|&s| s < rows.len());
+        if ui.add_enabled(sel.is_some_and(|s| s > 0), egui::Button::new("Up")).clicked() {
+            let s = sel.unwrap();
+            rows.swap(s, s - 1);
+            *selected = Some(s - 1);
+        }
+        if ui.add_enabled(sel.is_some_and(|s| s + 1 < rows.len()), egui::Button::new("Down")).clicked() {
+            let s = sel.unwrap();
+            rows.swap(s, s + 1);
+            *selected = Some(s + 1);
+        }
+        if ui.add_enabled(sel.is_some() && rows.len() > 1, egui::Button::new("Remove")).clicked() {
+            rows.remove(sel.unwrap());
+            *selected = None;
+        }
+        buttons(ui, rows);
+    });
+}
+
+/// Reads the TRASHCAN in the background
+fn scan_trashcan(ctx: &egui::Context, dir: PathBuf) -> Receiver<Vec<TrashItem>> {
+    let (tx, rx) = channel();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        tx.send(trashcan::scan(&dir)).ok();
+        ctx.request_repaint();
+    });
+    rx
+}
+
 /// The keyboard shortcuts for the overview (F1)
 fn shortcut_list() -> Vec<(String, &'static str)> {
     vec![
@@ -2566,6 +2652,7 @@ fn shortcut_list() -> Vec<(String, &'static str)> {
         ("Type text".into(), "Search by name, UID, folder or audio ID"),
         ("Esc".into(), "Clear the search, close a dialog"),
         ("Double-click".into(), "Assign a new UID"),
+        ("F5".into(), "Read the card again"),
         ("F1".into(), "This overview"),
     ]
 }
@@ -2614,7 +2701,7 @@ fn new_tonie_ui(ui: &mut egui::Ui, nt: &mut NewTonie) -> Option<bool> {
     let uid_ok = uid_field(ui, &mut nt.uid);
 
     if nt.copy_tonie_file {
-        ui.label(format!("Copy {}", nt.files[0].display()));
+        ui.label(format!("Copy {}", nt.tracks[0].0.display()));
     } else {
         ui.horizontal(|ui| {
             ui.label("Name:");
@@ -2623,39 +2710,28 @@ fn new_tonie_ui(ui: &mut egui::Ui, nt: &mut NewTonie) -> Option<bool> {
         });
         ui.add_space(6.0);
         ui.label("Track order:");
-        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-            egui::Grid::new("tracks").striped(true).num_columns(3).show(ui, |ui| {
-                for (i, f) in nt.files.iter().enumerate() {
-                    let name = f.file_name().unwrap_or_default().to_string_lossy();
-                    if ui.selectable_label(nt.selected == Some(i), format!("{:>2}", i + 1)).clicked() {
-                        nt.selected = Some(i);
+        track_list(
+            ui,
+            "new_tonie_tracks",
+            &mut nt.tracks,
+            &mut nt.selected,
+            |(f, description)| {
+                (
+                    f.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                    egui::RichText::new(description).weak(),
+                )
+            },
+            |ui, tracks| {
+                if ui.button("Add files...").clicked() {
+                    if let Some(files) = pick_audio_files() {
+                        tracks.extend(actions::initial_track_order(files).into_iter().map(|f| {
+                            let d = actions::id3_description(&f);
+                            (f, d)
+                        }));
                     }
-                    if ui.selectable_label(nt.selected == Some(i), name.as_ref()).clicked() {
-                        nt.selected = Some(i);
-                    }
-                    ui.label(&nt.descriptions[i]);
-                    ui.end_row();
                 }
-            });
-        });
-        ui.horizontal(|ui| {
-            let sel = nt.selected;
-            if ui.add_enabled(sel.map(|s| s > 0).unwrap_or(false), egui::Button::new("Up")).clicked() {
-                let s = sel.unwrap();
-                nt.files.swap(s, s - 1);
-                nt.descriptions.swap(s, s - 1);
-                nt.selected = Some(s - 1);
-            }
-            if ui
-                .add_enabled(sel.map(|s| s + 1 < nt.files.len()).unwrap_or(false), egui::Button::new("Down"))
-                .clicked()
-            {
-                let s = sel.unwrap();
-                nt.files.swap(s, s + 1);
-                nt.descriptions.swap(s, s + 1);
-                nt.selected = Some(s + 1);
-            }
-        });
+            },
+        );
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.checkbox(&mut nt.custom_audio_id, "Set a specific Audio-ID (hex)");
@@ -2830,6 +2906,13 @@ fn details(ui: &mut egui::Ui, e: &Entry) {
         };
         row("UID", e.file.uid.clone());
         row("Date", format_date(e.date()));
+        row(
+            "Size",
+            match e.file.size {
+                s if s < 1_000_000 => format!("{} KB", s.div_ceil(1000)),
+                s => format!("{:.1} MB", s as f64 / 1_000_000.0),
+            },
+        );
         row("Live", if e.file.live { "yes".into() } else { "no".into() });
         match &e.analysis {
             Some(Ok(a)) => {

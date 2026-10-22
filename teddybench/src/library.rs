@@ -18,6 +18,8 @@ pub struct FoundFile {
     pub label: String,
     pub created: Option<SystemTime>,
     pub modified: Option<SystemTime>,
+    /// File size in bytes
+    pub size: u64,
     pub live: bool,
 }
 
@@ -89,6 +91,7 @@ fn found_file(path: PathBuf, uid: String, label: String) -> FoundFile {
         live: crate::fsattr::is_live(&path).unwrap_or(false),
         created: meta.as_ref().and_then(|m| m.created().ok()),
         modified: meta.as_ref().and_then(|m| m.modified().ok()),
+        size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
         uid,
         label,
         path,

@@ -45,9 +45,11 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
   Tonies found stay selected, so actions never affect hidden ones.
 - Keyboard: arrow keys, Home and End select the next, first or last Tonie, Space plays or stops it;
   F1 (*Help → Keyboard shortcuts*) lists all shortcuts.
-- Details of the selected Tonie with its track list, playback with seeking.
+- Details of the selected Tonie (UID, date, size, audio ID, length) with its track list, playback with
+  seeking. *File → Refresh* (F5) reads the card again.
 - Create Tonie files from audio files (MP3, Ogg Opus, Ogg Vorbis, FLAC, WAV, M4A; also by drag and drop
-  onto the window) with track ordering, or add an existing Tonie file. The new Tonie is named after the tags
+  onto the window) or add an existing Tonie file. The tracks are ordered by folder (e.g. the discs of an
+  album) and ID3 track number; drag them or use Up/Down to change the order, add and remove files. The new Tonie is named after the tags
   of the files (album artist and album) or their folder. Each new Tonie gets its own audio ID, also when
   several are made within a second.
 - Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
@@ -58,7 +60,8 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
 - **Deleted Tonies (TRASHCAN):** a Toniebox connected to the cloud moves deleted Tonies into the `TRASHCAN`
   folder next to `CONTENT` instead of deleting them. TeddyBench lists them with name, audio ID, length and
   deletion date, and restores them for a tag UID (entered, or read with the NFC reader) byte for byte or as
-  a new Tonie with a new audio ID (without re-encoding), or deletes them permanently.
+  a new Tonie with a new audio ID (without re-encoding), or deletes them permanently. A Tonie already on
+  the card for that UID can be replaced; it goes into the TRASHCAN instead.
 - Export the selected Tonies (see [Exporting audio](#exporting-audio)) or their Tonie files, or use
   **Copy to MicroSD** to copy the selected Tonie folders to another SD card.
 - **Custom tag covers:** printable A4 PDFs with round cover images for the selected Tonies

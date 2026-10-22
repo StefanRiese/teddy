@@ -11,18 +11,31 @@ use tonie_core::TonieFile;
 use crate::export::JobStatus;
 use crate::uid::file_for_uid;
 
-/// Initial order of files for a new Tonie: by ID3 track number, files without one at the end.
-pub fn initial_track_order(mut files: Vec<PathBuf>) -> Vec<PathBuf> {
-    files.sort_by_key(|f| id3::Tag::read_from_path(f).ok().and_then(|t| t.track()).unwrap_or(u32::MAX));
-    files
+/// Initial order of files for a new Tonie: grouped by folder (e.g. the discs of an album), within a
+/// folder by ID3 track number, files without one after those, then by name.
+pub fn initial_track_order(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut keyed: Vec<(PathBuf, u32, PathBuf)> = files
+        .into_iter()
+        .map(|f| {
+            let track = id3::Tag::read_from_path(&f).ok().and_then(|t| t.track()).unwrap_or(u32::MAX);
+            (f.parent().map(Path::to_path_buf).unwrap_or_default(), track, f)
+        })
+        .collect();
+    keyed.sort();
+    keyed.into_iter().map(|(_, _, f)| f).collect()
 }
 
-/// "Artist - Title" from the ID3 tag, for the track list.
+/// "Track - Artist - Title" from the ID3 tag (what it has of it), for the track list.
 pub fn id3_description(path: &Path) -> String {
-    match id3::Tag::read_from_path(path) {
-        Ok(t) => format!("{} - {}", t.artist().unwrap_or(""), t.title().unwrap_or("")),
-        Err(_) => String::new(),
-    }
+    let Ok(t) = id3::Tag::read_from_path(path) else { return String::new() };
+    let track = t.track().map(|n| format!("{n:02}"));
+    [track.as_deref(), t.artist(), t.title()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" - ")
 }
 
 /// A name for a new Tonie from the tags of its files: "Album Artist - Album", "Artist - Album" or
@@ -400,7 +413,26 @@ mod tests {
             .iter()
             .map(|f| f.file_name().unwrap().to_string_lossy().to_string())
             .collect();
-        assert_eq!(names, ["b_song.mp3", "a_intro.mp3", "c_end.mp3", "opus_input.ogg"]);
+        /* the folder inputs comes before inputs/album */
+        assert_eq!(names, ["opus_input.ogg", "b_song.mp3", "a_intro.mp3", "c_end.mp3"]);
+    }
+
+    #[test]
+    fn track_order_groups_folders() {
+        let album = fixtures().join("inputs/album");
+        let prefix = fixtures().join("inputs/prefix");
+        /* two "discs": the album with track numbers, the prefix files without */
+        let files = vec![
+            prefix.join("0002.mp3"),
+            album.join("c_end.mp3"),
+            prefix.join("0001.mp3"),
+            album.join("b_song.mp3"),
+        ];
+        let names: Vec<String> = initial_track_order(files)
+            .iter()
+            .map(|f| f.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["b_song.mp3", "c_end.mp3", "0001.mp3", "0002.mp3"]);
     }
 
     #[test]
