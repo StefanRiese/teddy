@@ -3,12 +3,13 @@
 ################################################################################
 
 /.vs
-/*/bin
-/*/obj
-/packages
+/csharp/.vs
+/csharp/*/bin
+/csharp/*/obj
+/csharp/packages
 *.user
 
 # Local runtime files
 teddyBench.cfg
 tonies.json
-TeddyBench/Resources/ffmpeg.exe
+csharp/TeddyBench/Resources/ffmpeg.exe

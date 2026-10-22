@@ -6,7 +6,10 @@ This repository is a fork of [toniebox-reverse-engineering/teddy](https://github
 
 ## Components
 
-| Project | Description |
+The C# implementation (Windows) is in `csharp/`, a cross-platform port in Rust for Windows, Linux and
+macOS is in `rust/` (see [rust/README.md](rust/README.md)).
+
+| Project (in `csharp/`) | Description |
 |---|---|
 | **TeddyBench** | Windows GUI. Browse the `CONTENT` folder of a Toniebox SD card, play, export, encode and manage Tonie files, and work with NFC tags. |
 | **Teddy** | Command-line tool for decoding, encoding, inspecting and renaming Tonie files. |
@@ -110,9 +113,9 @@ The bit rate must be a multiple of 24 kbps, otherwise the output file is incompa
 
 Requirements: Windows, Visual Studio 2022 (or MSBuild) with the .NET Framework 4.8 developer pack.
 
-1. Open `Teddy.sln` and restore NuGet packages (`nuget restore Teddy.sln`).
-2. For the ffmpeg-based MP3 exports, extract `TeddyBench/Resources/ffmpeg.zip` into `TeddyBench/Resources/` so that `ffmpeg.exe` exists there. It is only shipped as a zip because the executable exceeds GitHub's file size limit, and the extracted file is git-ignored. The native MP3 export doesn't need it: its `libmp3lame` DLLs (`TeddyBench/Native/`) are embedded into `TeddyBench.exe` by Costura.
-3. Build the solution, e.g. `msbuild Teddy.sln -t:rebuild -p:Configuration=Release`.
+1. Open `csharp/Teddy.sln` and restore NuGet packages (`nuget restore csharp/Teddy.sln`).
+2. For the ffmpeg-based MP3 exports, extract `csharp/TeddyBench/Resources/ffmpeg.zip` into `csharp/TeddyBench/Resources/` so that `ffmpeg.exe` exists there. It is only shipped as a zip because the executable exceeds GitHub's file size limit, and the extracted file is git-ignored. The native MP3 export doesn't need it: its `libmp3lame` DLLs (`csharp/TeddyBench/Native/`) are embedded into `TeddyBench.exe` by Costura.
+3. Build the solution, e.g. `msbuild csharp/Teddy.sln -t:rebuild -p:Configuration=Release`.
 
 The GitHub Actions workflow in `.github/workflows/build.yml` builds Debug and Release on every push and uploads `TeddyBench.exe` as an artifact.
 

@@ -32,15 +32,15 @@ jobs:
         msbuild-architecture: x64
 
     - name: Nuget restore
-      run: nuget restore Teddy.sln
+      run: nuget restore csharp/Teddy.sln
 
     - name: Build Teddy
-      run: msbuild Teddy/Teddy.csproj -t:rebuild -property:Configuration=Release
+      run: msbuild csharp/Teddy/Teddy.csproj -t:rebuild -property:Configuration=Release
 
     - name: Generate reference files
       shell: pwsh
       run: |
-        $teddy = Get-ChildItem -Recurse -Filter Teddy.exe Teddy/bin | Select-Object -First 1
+        $teddy = Get-ChildItem -Recurse -Filter Teddy.exe csharp/Teddy/bin | Select-Object -First 1
         Write-Host "Using $($teddy.FullName)"
         rust/tests/fixtures/generate_reference.ps1 -Teddy $teddy.FullName
 

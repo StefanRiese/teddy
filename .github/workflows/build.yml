@@ -26,7 +26,7 @@ jobs:
     runs-on: windows-latest
 
     env:
-      Solution_Name: Teddy.sln
+      Solution_Name: csharp/Teddy.sln
       # set when building a release: a pushed v* tag or the tag given to a manual run
       RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
 
@@ -59,7 +59,7 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: TeddyBench-${{ matrix.configuration }}
-        path: TeddyBench/bin/${{ matrix.configuration }}/net48/win10-x64/TeddyBench.exe
+        path: csharp/TeddyBench/bin/${{ matrix.configuration }}/net48/win10-x64/TeddyBench.exe
       env:
         Configuration: ${{ matrix.configuration }}
 
@@ -71,10 +71,10 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        $out = "TeddyBench/bin/Release/net48/win10-x64"
+        $out = "csharp/TeddyBench/bin/Release/net48/win10-x64"
         New-Item -ItemType Directory -Force package/Resources | Out-Null
         Copy-Item "$out/TeddyBench.exe", "$out/TeddyBench.exe.config" package/
-        Expand-Archive TeddyBench/Resources/ffmpeg.zip -DestinationPath package/Resources
+        Expand-Archive csharp/TeddyBench/Resources/ffmpeg.zip -DestinationPath package/Resources
         # Proxmark3 firmware flashed by TeddyBench, unchanged since upstream v1.7.0
         gh release download v1.7.0 -R toniebox-reverse-engineering/teddy -p TeddyBench.zip -D upstream
         Expand-Archive upstream/TeddyBench.zip -DestinationPath upstream/content
