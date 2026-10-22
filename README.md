@@ -19,8 +19,7 @@ release. The settings, custom names and Tonie files are compatible, so you can s
 
 ## Download
 
-The [releases page](https://github.com/StefanRiese/teddy/releases) has the `rust-v*` releases, currently
-pre-releases:
+Download the [latest release](https://github.com/StefanRiese/teddy/releases/latest) (tagged `rust-v*`):
 
 | File | Platform |
 |---|---|
@@ -205,7 +204,7 @@ builds TeddyBench.app and `teddy` as universal binaries (Apple Silicon and Intel
 image.
 
 The workflow `.github/workflows/rust.yml` checks formatting, runs clippy and the tests on Windows, Linux and
-macOS and builds the downloads on every push. Pushing a `rust-v*` tag publishes them as a pre-release.
+macOS and builds the downloads on every push. Pushing a `rust-v*` tag publishes them as a release.
 
 ## Tests
 

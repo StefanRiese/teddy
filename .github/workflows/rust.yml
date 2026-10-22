@@ -112,7 +112,6 @@ jobs:
         pattern: teddy-rust-*
         merge-multiple: true
 
-    # pre-release and never "latest" while the port is a preview
     - name: Publish release
       env:
         GH_TOKEN: ${{ github.token }}
@@ -135,4 +134,4 @@ jobs:
         - NFC readers (Proxmark3, ESP with PN5180) are not yet tested with real hardware;
           flashing the Proxmark3 firmware is not supported.
         NOTES
-        gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --title "TeddyBench ${TAG#rust-v} (Rust port, preview)" --notes-file notes.md --prerelease --latest=false --verify-tag
+        gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --title "TeddyBench ${TAG#rust-v}" --notes-file notes.md --latest --verify-tag
