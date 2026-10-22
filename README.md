@@ -87,6 +87,11 @@ Custom names you give to Tonies are stored in `customTonies.json`.
 Teddy.exe -m <mode> [options] <files...>
 ```
 
+The Rust port's `teddy` takes the same options and works the same way, also on Linux and macOS (use `/` in
+paths there). It additionally accepts Ogg Opus, FLAC and WAV for `encode`, has `-V`/`--version`, and
+fixes a few bugs, e.g. folders are ordered by the ID3 track number and the exit code is non-zero when
+something failed; see [Differences from Teddy.exe](rust/README.md#differences-from-teddyexe).
+
 | Option | Description |
 |---|---|
 | `-m`, `--mode=` | Operating mode: `info`, `decode`, `encode`, `rename` |
