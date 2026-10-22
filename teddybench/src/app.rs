@@ -173,6 +173,16 @@ enum Dialog {
     },
     Antenna(Measurement),
     Trashcan(TrashView),
+    AudioId(AudioIdDraft),
+}
+
+/// Changing the audio ID of a Tonie
+struct AudioIdDraft {
+    path: PathBuf,
+    current: u32,
+    /// A new ID as for a new Tonie, or the one entered in `text`
+    generate: bool,
+    text: String,
 }
 
 /// The deleted Tonies in the TRASHCAN folder of the card
@@ -240,6 +250,7 @@ enum Action {
     RemoveAllLive,
     Trashcan,
     Shortcuts,
+    ChangeAudioId,
     /// Select the next Tonie in the direction of the arrow key, or the first/last one
     Move(egui::Key),
     Rename,
@@ -787,6 +798,21 @@ impl TeddyBenchApp {
                 self.scanner.send(Command::Rescan);
             }
             Action::Shortcuts => self.dialog = Some(Dialog::Shortcuts),
+            Action::ChangeAudioId => {
+                if let Some(e) = self.single_selected() {
+                    match e.analysis() {
+                        Some(a) => {
+                            self.dialog = Some(Dialog::AudioId(AudioIdDraft {
+                                path: e.file.path.clone(),
+                                current: a.audio_id,
+                                generate: true,
+                                text: format!("{:08X}", a.audio_id),
+                            }))
+                        }
+                        None => self.message("Change audio ID", "The file has not been read yet."),
+                    }
+                }
+            }
             Action::Move(key) => self.move_selection(key),
             Action::Trashcan => {
                 let Some(dir) = self.current_dir.as_deref().and_then(trashcan::find) else {
@@ -1517,6 +1543,7 @@ impl TeddyBenchApp {
             ui.separator();
             item(ui, single, "Assign new UID", || Action::AssignUid);
             item(ui, single, "Assign random UID", || Action::RandomUid);
+            item(ui, single, "Change audio ID...", || Action::ChangeAudioId);
             item(ui, single, "Show in file manager", || Action::ShowInFolder);
             ui.separator();
             item(ui, true, "Export to .ogg", || Action::Export(ExportFormat::Ogg));
@@ -1577,6 +1604,63 @@ impl TeddyBenchApp {
                     ui.button("OK").clicked()
                 });
                 keep = !(r.inner || r.should_close());
+            }
+            Dialog::AudioId(d) => {
+                let parsed = u32::from_str_radix(d.text.trim().trim_start_matches("0x"), 16).ok();
+                let r = egui::Modal::new(Id::unique("audio_id")).show(ctx, |ui| {
+                    ui.set_max_width(480.0);
+                    ui.heading("Change audio ID");
+                    ui.label(format!("Current audio ID: 0x{:08X}", d.current));
+                    ui.radio_value(&mut d.generate, true, "New audio ID, as for a newly created Tonie");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut d.generate, false, "This audio ID (hex):");
+                        ui.add_enabled(
+                            !d.generate,
+                            egui::TextEdit::singleline(&mut d.text)
+                                .desired_width(90.0)
+                                .char_limit(10)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "The audio is not re-encoded, only the ID in the header and the Ogg stream changes, and with it the \
+                             hash. A retail Tonie is then no longer found in tonies.json; its name is kept as a custom name.",
+                        )
+                        .weak(),
+                    );
+                    ui.add_space(8.0);
+                    let ok = d.generate || parsed.is_some();
+                    ui.horizontal(|ui| (ui.add_enabled(ok, egui::Button::new("Change")).clicked(), ui.button("Cancel").clicked()))
+                        .inner
+                });
+                let (ok, cancel) = r.inner;
+                keep = !(ok || cancel || r.should_close());
+                if ok {
+                    let id = if d.generate { Some(self.new_custom_audio_id()) } else { parsed };
+                    if let Some(id) = id.filter(|&id| id != d.current) {
+                        let path = d.path.clone();
+                        if self.playing.as_ref() == Some(&path) {
+                            self.stop_playback();
+                        }
+                        /* the hash changes: keep the name */
+                        if let Some(e) = self.entries.iter().find(|e| e.file.path == path) {
+                            let name = e.resolved.as_ref().filter(|r| r.kind != Kind::Unknown && !r.name.starts_with("Unnamed Teddy"));
+                            if let Some(r) = name {
+                                self.pending_names.insert(path.clone(), r.name.clone());
+                            }
+                        }
+                        match actions::change_audio_id(&path, id) {
+                            Ok(()) => applog::info(format!("{}: audio ID 0x{:08X} -> 0x{id:08X}", path.display(), d.current)),
+                            Err(e) => {
+                                self.pending_names.remove(&path);
+                                self.message("Change audio ID", e);
+                                return;
+                            }
+                        }
+                        self.scanner.send(Command::Rescan);
+                    }
+                }
             }
             Dialog::Shortcuts => {
                 let r = egui::Modal::new(Id::unique("shortcuts")).show(ctx, |ui| {
@@ -2711,7 +2795,7 @@ impl eframe::App for TeddyBenchApp {
 #[cfg(debug_assertions)]
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
-    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts` opens a dialog (`move`: arrow right),
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts|audioid` opens a dialog (`move`: arrow right),
     /// `TEDDYBENCH_SCREENSHOT_SEARCH=<text>` searches.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some((path, started)) = self.screenshot.clone() else { return };
@@ -2733,6 +2817,7 @@ impl TeddyBenchApp {
                         Ok("trash") => self.apply(Action::Trashcan, ctx),
                         Ok("shortcuts") => self.apply(Action::Shortcuts, ctx),
                         Ok("move") => self.apply(Action::Move(egui::Key::ArrowRight), ctx),
+                        Ok("audioid") => self.apply(Action::ChangeAudioId, ctx),
                         Ok("layout") => {
                             let s = &self.settings;
                             self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {

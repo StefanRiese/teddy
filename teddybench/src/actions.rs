@@ -182,6 +182,20 @@ pub fn reassign_uid(file: &Path, new_uid: &str, content_dir: &Path) -> Result<Op
     Ok(remove_dir_if_empty(file, content_dir))
 }
 
+/// Gives a Tonie file another audio ID, without re-encoding the audio. The new file is written
+/// next to the old one first and then replaces it.
+pub fn change_audio_id(file: &Path, audio_id: u32) -> Result<(), String> {
+    let bytes = TonieFile::open(file, true)
+        .and_then(|t| t.with_audio_id(audio_id))
+        .map_err(|e| format!("Cannot read '{}': {e}", file.display()))?;
+    let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let temp = file.with_file_name(format!("{name}.tmp"));
+    std::fs::write(&temp, &bytes).and_then(|_| std::fs::rename(&temp, file)).map_err(|e| {
+        std::fs::remove_file(&temp).ok();
+        format!("Failed to write '{}': {e}", file.display())
+    })
+}
+
 /// Deletes a Tonie file and its directory, if that is empty then.
 pub fn delete_tonie(file: &Path, content_dir: &Path) -> Result<(), String> {
     std::fs::remove_file(file).map_err(|e| format!("Failed to delete file '{}': {e}", file.display()))?;
@@ -265,6 +279,20 @@ mod tests {
         assert_eq!(title_from_tags(&[prefix.join("0001.mp3"), prefix.join("0002.mp3")]).as_deref(), Some("prefix"));
         /* no tags, different folders */
         assert_eq!(title_from_tags(&[prefix.join("0001.mp3"), fixtures().join("inputs/silence.mp3")]), None);
+    }
+
+    #[test]
+    fn changes_the_audio_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("500304E0");
+        std::fs::copy(fixtures().join("reference/album_cbr96/0A0B0C01/500304E0"), &file).unwrap();
+        change_audio_id(&file, 0x1234_5678).unwrap();
+        let tonie = TonieFile::open(&file, true).unwrap();
+        assert_eq!(tonie.header.audio_id, 0x1234_5678);
+        assert!(tonie.hash_correct);
+        /* no temporary file left */
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(change_audio_id(&dir.path().join("missing"), 1).is_err());
     }
 
     #[test]
