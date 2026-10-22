@@ -5,26 +5,54 @@ Releases are tagged `rust-v<version>`. The former C# TeddyBench (`v1.x` releases
 
 ## 0.1.7 – 2026-10-22
 
-- Ogg Opus files that fit a Tonie (stereo, 20 ms packets) are copied into new Tonies without re-encoding, in
-  TeddyBench and `teddy -m encode` (upstream issue #52). Tracks exported with *Save as .ogg* or `teddy -m
-  decode` come back without any loss. `teddy --reencode` encodes them anyway.
+### New
+
+- **Pause** and **previous/next track** (⏮/⏭) while playing; the toolbar shows "Track 3/9". While a Tonie
+  plays, a click on a track in its details plays that track. Play, pause and stop are icons; Space plays the
+  selected Tonie, pauses and continues.
+- Ogg Opus files that fit a Tonie (stereo, 20 ms packets) are copied into new Tonies **without re-encoding**,
+  in TeddyBench and `teddy -m encode` (upstream issue #52). Tracks exported with *Save as .ogg* or
+  `teddy -m decode` come back without any loss. `teddy --reencode` encodes them anyway.
 - README: how to put your own audio on a figure (upstream issue #56).
-- Much faster start with many Tonies: only the header and the end of each file are read, not the whole file
-  (about 70 KB instead of up to 100 MB per Tonie on the SD card).
-- Playback: pause, previous/next track (⏮/⏭, "Track 3/9"), and a click on a track in the details of the
-  Tonie playing jumps to it. Play, pause and stop are icons; Space pauses and continues.
+
+### Fixed and improved
+
+- **Much faster start** with many Tonies: only the header and the end of each file are read, not the whole
+  file – about 70 KB instead of up to 100 MB per Tonie on the SD card. 7 real Tonies (292 MB) took 3.4 s
+  before and 1 ms now.
+- No message about the audio output on the console when the program exits.
+
+### Notes
+
+- Tracks start where the Toniebox starts them when jumping: at the first page of their chapter. That is one
+  page (about 340 ms) earlier than the times `teddy -m info` shows, which counts like Teddy.exe.
+- Editing tracks and changing the audio ID were tested with real Tonie files: every kept track stays
+  identical packet for packet. Ogg Opus files from other programs than TeddyBench are not yet tested on a real
+  Toniebox.
 
 ## 0.1.6 – 2026-10-22
 
-- Tonie names, tracks and covers come from `toniesV2.json` of the
-  [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) repository on GitHub; `tonies.json`
-  from api.revvox.de is only used if GitHub fails. Files in the old format still work, e.g. with `teddy -j` or
-  a `tonies.json` edited by hand. Titles of Tonies without an episode no longer end in " - None".
-- Track names are only used when their number matches the tracks of the file. A re-release often has
+### New
+
+- Tonie names, tracks and covers come from **`toniesV2.json`** of the
+  [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) repository on GitHub, which is
+  updated several times a day. `tonies.json` from api.revvox.de is only used if GitHub fails.
+
+### Fixed and improved
+
+- **Track names are only used when their number matches the tracks of the file.** A re-release often has
   another number of tracks than the version the names were written for; its tracks were named wrongly by
   position in exports, the Edit tracks dialog and `teddy -m decode`. Fitting names are also looked for in
   other entries with the same audio or the same series and episode. The details say when the names belong
   to another version.
+- Titles of Tonies without an episode no longer end in " - None".
+
+### Notes
+
+- The download is saved as `toniesV2.json` in the data folder. With `DownloadJson` set to `false`, the file
+  changed last of `toniesV2.json` and `tonies.json` (old format, e.g. edited by hand) is used.
+- `teddy -j` accepts both formats, as a file or URL.
+- Track names that belong to another version are common: 3 of 7 real Tonies we checked have them.
 
 ## 0.1.5 – 2026-10-22
 
