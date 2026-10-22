@@ -3,7 +3,7 @@
 Releases are tagged `rust-v<version>`. The former C# TeddyBench (`v1.x` releases) is kept in the
 `csharp-backup` branch.
 
-## Unreleased
+## 0.1.6 – 2026-10-22
 
 - Tonie names, tracks and covers come from `toniesV2.json` of the
   [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) repository on GitHub; `tonies.json`
