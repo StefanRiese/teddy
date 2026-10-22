@@ -16,7 +16,7 @@ use teddybench::scanner::{Command, Event, Scanner};
 use teddybench::settings::{DataDir, Settings};
 use teddybench::tagpdf::{TagLayout, TagSide};
 use teddybench::trashcan::{self, TrashItem};
-use teddybench::uid::{is_valid_uid, random_uid, UID_PREFIX};
+use teddybench::uid::{is_valid_uid, random_uid, UID_PREFILL, UID_PREFIX};
 use teddybench::{actions, applog, export, fsattr, tagpdf, uid, VERSION};
 
 const RELEASES_URL: &str = "https://github.com/StefanRiese/teddy/releases";
@@ -308,6 +308,8 @@ pub struct TeddyBenchApp {
     pending_names: HashMap<PathBuf, String>,
     /// Only Tonies matching this are shown
     search: String,
+    /// Select the Tonie of the tag on the reader when the files of a newly opened card arrive
+    select_tag_on_load: bool,
     /// The rows of the grid as last drawn (entry indices), for moving with the arrow keys
     grid_rows: Vec<Vec<usize>>,
     player: Option<Player>,
@@ -399,6 +401,7 @@ impl TeddyBenchApp {
             last_audio_id: None,
             pending_names: HashMap::new(),
             search: String::new(),
+            select_tag_on_load: false,
             grid_rows: Vec::new(),
             player: None,
             playing: None,
@@ -443,15 +446,25 @@ impl TeddyBenchApp {
         }
         self.nfc.uid = uid.clone();
 
-        let found = uid.as_ref().and_then(|uid| {
+        if let Some(uid) = &uid {
             match &mut self.dialog {
                 Some(Dialog::AssignUid { uid: u, .. }) => *u = uid.clone(),
                 Some(Dialog::NewTonie(nt)) => nt.uid = uid.clone(),
                 Some(Dialog::Trashcan(t)) => t.uid = uid.clone(),
                 _ => {}
             }
-            self.entries.iter().find(|e| e.file.uid.eq_ignore_ascii_case(uid)).map(|e| e.file.path.clone())
-        });
+        }
+        self.select_tag_tonie();
+    }
+
+    /// Selects the Tonie of the tag on the reader, or undoes that selection once the tag is gone
+    fn select_tag_tonie(&mut self) {
+        let found = self
+            .nfc
+            .uid
+            .as_ref()
+            .and_then(|uid| self.entries.iter().find(|e| e.file.uid.eq_ignore_ascii_case(uid)))
+            .map(|e| e.file.path.clone());
         match found {
             Some(path) => {
                 self.selection = BTreeSet::from([path.clone()]);
@@ -562,6 +575,9 @@ impl TeddyBenchApp {
                     self.current_dir = Some(dir);
                     self.entries.clear();
                     self.selection.clear();
+                    self.nfc.auto_selected = false;
+                    /* a tag that is already on the reader selects its Tonie once the files are known */
+                    self.select_tag_on_load = true;
                 }
                 Event::Lost => {
                     self.current_dir = None;
@@ -587,6 +603,9 @@ impl TeddyBenchApp {
                         .collect();
                     let paths: HashSet<&PathBuf> = self.entries.iter().map(|e| &e.file.path).collect();
                     self.selection.retain(|p| paths.contains(p));
+                    if std::mem::take(&mut self.select_tag_on_load) && self.nfc.uid.is_some() {
+                        self.select_tag_tonie();
+                    }
                 }
                 Event::Analyzed(path, result) => {
                     if let (Ok(a), Some(name)) = (&result, self.pending_names.remove(&path)) {
@@ -866,7 +885,7 @@ impl TeddyBenchApp {
                     items: None,
                     rx: Some(scan_trashcan(ctx, dir)),
                     selected: None,
-                    uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFIX.into()),
+                    uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFILL.into()),
                     as_new: false,
                     replace: false,
                     confirm_delete: false,
@@ -1033,7 +1052,7 @@ impl TeddyBenchApp {
                 .collect(),
             selected: None,
             /* the tag on the reader, if there is one */
-            uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFIX.into()),
+            uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFILL.into()),
             custom_audio_id: false,
             audio_id: String::new(),
             copy_tonie_file,
@@ -2669,7 +2688,7 @@ fn shortcut_text(key: &str) -> String {
 /// Text field for a tag UID with validation. Returns whether the UID is valid.
 fn uid_field(ui: &mut egui::Ui, uid: &mut String) -> bool {
     if !uid.to_ascii_uppercase().starts_with(UID_PREFIX) {
-        *uid = UID_PREFIX.into();
+        *uid = UID_PREFILL.into();
     }
     let valid = is_valid_uid(uid);
     ui.horizontal(|ui| {
@@ -2690,7 +2709,7 @@ fn uid_field(ui: &mut egui::Ui, uid: &mut String) -> bool {
             *uid = random_uid();
         }
     });
-    ui.label(egui::RichText::new("16 hex digits starting with E00403, as printed by NFC readers").weak());
+    ui.label(egui::RichText::new("16 hex digits starting with E00403 (Tonies: E0040350), as printed by NFC readers").weak());
     valid
 }
 

@@ -85,11 +85,13 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let json_source = args
-        .json
-        .clone()
-        .unwrap_or_else(|| format!("https://api.revvox.de/tonies.json?source=Teddy&version={}", env!("CARGO_PKG_VERSION")));
-    let mut tonies = load_json(&json_source);
+    let mut tonies = match &args.json {
+        Some(source) => load_json(&[source.as_str()]),
+        None => load_json(&[
+            &format!("https://api.revvox.de/tonies.json?source=Teddy&version={}", env!("CARGO_PKG_VERSION")),
+            tonies::FALLBACK_URL,
+        ]),
+    };
 
     let ok = match args.mode.as_str() {
         "info" => mode_info(&args, &mut tonies),
@@ -110,26 +112,36 @@ fn main() -> ExitCode {
     }
 }
 
-fn load_json(source: &str) -> Vec<TonieData> {
+/// Reads tonies.json from the first source that works
+fn load_json(sources: &[&str]) -> Vec<TonieData> {
+    let mut error = None;
+    for source in sources {
+        match read_json(source) {
+            Ok(Some(t)) => return t,
+            Ok(None) => return Vec::new(),
+            Err(e) => error = Some(e),
+        }
+    }
+    if let Some(e) = error {
+        println!("Failed to load JSON:");
+        println!("{e}");
+    }
+    Vec::new()
+}
+
+/// `None` if `source` is neither a URL nor a file
+fn read_json(source: &str) -> Result<Option<Vec<TonieData>>, String> {
     let text = if source.starts_with("http") {
         ureq::get(source)
             .call()
             .map_err(|e| e.to_string())
-            .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()))
+            .and_then(|mut r| r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| e.to_string()))
     } else if Path::new(source).is_file() {
         std::fs::read_to_string(source).map_err(|e| e.to_string())
     } else {
-        return Vec::new();
+        return Ok(None);
     };
-
-    match text.and_then(|t| tonies::parse(&t).map_err(|e| e.to_string())) {
-        Ok(t) => t,
-        Err(e) => {
-            println!("Failed to load JSON:");
-            println!("{e}");
-            Vec::new()
-        }
-    }
+    text.and_then(|t| tonies::parse(&t).map_err(|e| e.to_string())).map(Some)
 }
 
 /// Collects the files to work on; directories are searched for Tonie files.

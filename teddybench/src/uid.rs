@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 
 pub const UID_PREFIX: &str = "E00403";
+/// What the UID of Tonie tags starts with: only the last 8 digits have to be entered
+pub const UID_PREFILL: &str = "E0040350";
 
 /// Reverses the byte order of a hex string, ignoring anything that is not a hex pair.
 pub fn reverse_uid(uid: &str) -> String {
@@ -56,14 +58,14 @@ pub fn random_uid() -> String {
     seed ^= (std::process::id() as u64) << 32;
     let mut x = seed | 1;
     let mut digits = String::new();
-    for _ in 0..10 {
+    for _ in 0..8 {
         /* xorshift */
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
         digits.push(char::from_digit((x % 16) as u32, 16).unwrap().to_ascii_uppercase());
     }
-    format!("{UID_PREFIX}{digits}")
+    format!("{UID_PREFILL}{digits}")
 }
 
 #[cfg(test)]
@@ -85,5 +87,6 @@ mod tests {
     fn random_uids_are_valid() {
         let a = random_uid();
         assert!(is_valid_uid(&a), "{a}");
+        assert!(a.starts_with(UID_PREFILL));
     }
 }

@@ -23,12 +23,9 @@ Not tested yet:
 
 Known rough edges:
 
-- Turning the reader off and on again quickly can delay finding it by a minute: the old reader closes
-  the port in the background, and a port that is still busy is skipped for 60 seconds.
 - Cancelling an emulation only stops TeddyBench from waiting; the Proxmark3 keeps emulating until its
   button is pressed (same as C#).
 - No automated test of the background reader thread and the UI reacting to its events.
-- A tag put on the reader before the SD card is loaded does not select its Tonie afterwards (same as C#).
 - Connecting a Proxmark3 takes a few seconds because the antenna is measured right away (same as C#).
 
 ## TRASHCAN

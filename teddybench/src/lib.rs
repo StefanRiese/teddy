@@ -27,27 +27,36 @@ pub fn load_tonies_json(data_dir: &settings::DataDir, download: bool) -> (Vec<to
     let mut status = String::new();
 
     if download || !path.is_file() {
-        let url = format!("https://api.revvox.de/tonies.json?source=TeddyBench&version={VERSION}");
-        match ureq::get(&url)
-            .call()
-            .map_err(|e| e.to_string())
-            .and_then(|mut r| r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| e.to_string()))
-        {
-            Ok(json) if !json.is_empty() => {
-                applog::info(format!("Downloaded tonies.json ({} bytes)", json.len()));
-                std::fs::create_dir_all(&data_dir.0).ok();
-                if std::fs::write(&path, &json).is_err() {
-                    status = "Writing Failed - is the tonies.json accessible?".into();
+        let primary = format!("https://api.revvox.de/tonies.json?source=TeddyBench&version={VERSION}");
+        for url in [primary.as_str(), tonie_core::tonies::FALLBACK_URL] {
+            let result = ureq::get(url)
+                .call()
+                .map_err(|e| e.to_string())
+                .and_then(|mut r| r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| e.to_string()))
+                .and_then(|json| match tonie_core::tonies::parse(&json) {
+                    /* an error page must not replace a good local copy */
+                    Ok(t) if !t.is_empty() => Ok((json, t)),
+                    Ok(_) => Err("no entries".into()),
+                    Err(e) => Err(format!("not a tonies.json ({e})")),
+                });
+            match result {
+                Ok((json, tonies)) => {
+                    applog::info(format!("Downloaded tonies.json from {url} ({} bytes)", json.len()));
+                    if url == tonie_core::tonies::FALLBACK_URL {
+                        status = "Downloaded from GitHub".into();
+                    }
+                    std::fs::create_dir_all(&data_dir.0).ok();
+                    if std::fs::write(&path, &json).is_err() {
+                        status = "Writing Failed - is the tonies.json accessible?".into();
+                    }
+                    return (tonies, status);
                 }
-                return match tonie_core::tonies::parse(&json) {
-                    Ok(t) => (t, status),
-                    Err(e) => (Vec::new(), format!("Parsing Failed: {e}")),
-                };
+                Err(e) => {
+                    status = format!("Download Failed: {e}");
+                    applog::warning(format!("tonies.json from {url}: {e}"));
+                }
             }
-            Ok(_) => status = "Download Failed: empty response".into(),
-            Err(e) => status = format!("Download Failed: {e}"),
         }
-        applog::warning(format!("tonies.json: {status}"));
     }
 
     match std::fs::read_to_string(&path) {

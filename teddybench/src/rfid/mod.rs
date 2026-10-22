@@ -227,12 +227,18 @@ impl Drop for Reader {
 #[derive(Default)]
 struct Ports {
     appeared: HashMap<String, Instant>,
-    failed: HashMap<String, Instant>,
+    /// When a port that failed may be tried again
+    retry_at: HashMap<String, Instant>,
 }
+
+/// A port that could not be opened (busy, e.g. still closed by a reader stopped a moment ago, or
+/// no permission) is tried again soon; one that opened but has no reader not before a minute.
+const RETRY_OPEN: Duration = Duration::from_secs(2);
+const RETRY_PROBE: Duration = Duration::from_secs(60);
 
 impl Ports {
     /// USB serial ports that are worth a try: present for a second (so the device has booted),
-    /// and not failed during the last minute. `TEDDYBENCH_NFC_PORT` names the port instead, e.g.
+    /// and not failed recently (see [`RETRY_OPEN`], [`RETRY_PROBE`]). `TEDDYBENCH_NFC_PORT` names the port instead, e.g.
     /// for a reader that is not connected through USB.
     fn candidates(&mut self, prefix: &str) -> Vec<String> {
         let present: Vec<String> = match std::env::var("TEDDYBENCH_NFC_PORT") {
@@ -261,17 +267,18 @@ impl Ports {
             }
             keep
         });
-        self.failed.retain(|p, _| present.contains(p));
+        self.retry_at.retain(|p, _| present.contains(p));
 
         present
             .into_iter()
             .filter(|p| now.duration_since(self.appeared[p]) > Duration::from_secs(1))
-            .filter(|p| self.failed.get(p).is_none_or(|t| now.duration_since(*t) > Duration::from_secs(60)))
+            .filter(|p| self.retry_at.get(p).is_none_or(|t| now >= *t))
             .collect()
     }
 
-    fn failed(&mut self, port: &str) {
-        self.failed.insert(port.to_string(), Instant::now());
+    /// Notes a failed port. Returns whether it failed for the first time.
+    fn failed(&mut self, port: &str, retry: Duration) -> bool {
+        self.retry_at.insert(port.to_string(), Instant::now() + retry).is_none()
     }
 }
 
@@ -352,8 +359,12 @@ impl Worker {
                     } else {
                         ""
                     };
-                    applog::warning(format!("{prefix} Cannot open {port}: {e}{hint}"));
-                    self.ports.failed(&port);
+                    let message = format!("{prefix} Cannot open {port}: {e}{hint}");
+                    if self.ports.failed(&port, RETRY_OPEN) {
+                        applog::warning(message);
+                    } else {
+                        applog::debug(message);
+                    }
                     continue;
                 }
             };
@@ -366,7 +377,7 @@ impl Worker {
                 Ok(None) => applog::debug(format!("{prefix} No {} at {port}", self.kind.label())),
                 Err(e) => applog::debug(format!("{prefix} No {} at {port}: {e}", self.kind.label())),
             }
-            self.ports.failed(&port);
+            self.ports.failed(&port, RETRY_PROBE);
         }
         None
     }
@@ -523,6 +534,18 @@ pub(crate) mod tests {
         fn clear_input(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn failed_ports_are_retried_later() {
+        let mut ports = Ports::default();
+        assert!(ports.failed("COM3", RETRY_OPEN));
+        /* the warning is only logged the first time */
+        assert!(!ports.failed("COM3", RETRY_OPEN));
+        let busy_until = ports.retry_at["COM3"];
+        assert!(busy_until <= Instant::now() + RETRY_OPEN);
+        ports.failed("COM4", RETRY_PROBE);
+        assert!(ports.retry_at["COM4"] > busy_until + Duration::from_secs(50));
     }
 
     #[test]

@@ -42,7 +42,8 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
 
 ### Features
 
-- Cover grid with names and covers from `tonies.json` ([api.revvox.de](https://api.revvox.de/tonies.json))
+- Cover grid with names and covers from `tonies.json` ([api.revvox.de](https://api.revvox.de/tonies.json), or
+  the copy in [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) if that fails)
   and your own names from `customTonies.json`; icon size slider, sorting by UID, product number, date or type.
 - **Search** by name, UID, folder or audio ID: start typing anywhere, Esc clears the search. Only the
   Tonies found stay selected, so actions never affect hidden ones.
@@ -99,7 +100,9 @@ remembered.
 ### NFC readers
 
 Enable the reader and choose its type in the *NFC reader* menu. It is searched on the USB serial ports; the
-UID of a tag put on it selects its Tonie and is filled in when assigning a UID or creating a Tonie.
+UID of a tag put on it selects its Tonie (also when the card is opened later) and is filled in when assigning
+a UID or creating a Tonie. UID fields start with `E0040350`, so only the last 8 digits printed on the tag
+need to be entered.
 `TEDDYBENCH_NFC_PORT=<port>` uses that port instead of searching. On Linux the user needs to be in the
 `dialout` group.
 
@@ -162,7 +165,7 @@ teddy -m rename [-y] [-d] <source dir> <dest dir>
 | `-y` | rename: actually rename files (otherwise dry run) |
 | `-d` | rename: delete duplicates |
 | `-w`, `--write` | info: write updated JSON to a local file |
-| `-j`, `--json` | JSON file/URL with details about Tonies (default: downloaded from api.revvox.de) |
+| `-j`, `--json` | JSON file/URL with details about Tonies (default: downloaded from api.revvox.de, or from GitHub if that fails) |
 | `-f`, `--format` | Output details as `csv`, `json` or `text` |
 | `-v` | Increase debug verbosity |
 | `-h`, `--help` | Show help |

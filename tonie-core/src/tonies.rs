@@ -59,6 +59,9 @@ impl TonieData {
     }
 }
 
+/// The community copy of tonies.json, used when the original source is not available
+pub const FALLBACK_URL: &str = "https://raw.githubusercontent.com/toniebox-reverse-engineering/tonies-json/release/tonies.json";
+
 pub fn parse(json: &str) -> Result<Vec<TonieData>, serde_json::Error> {
     serde_json::from_str(json)
 }
