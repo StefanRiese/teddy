@@ -122,6 +122,10 @@ jobs:
         TAG: ${{ github.ref_name }}
       run: |
         awk -v v="${TAG#rust-v}" '$1 == "##" { f = ($2 == v); next } f' CHANGELOG.md > notes.md
+        # every version section has these headings, also when one only says "None."
+        for heading in "### New" "### Fixed and improved" "### Notes"; do
+          grep -qx "$heading" notes.md || { echo "::error::CHANGELOG.md: section ${TAG#rust-v} has no '$heading'"; exit 1; }
+        done
         cat >> notes.md <<NOTES
 
         ### Downloads

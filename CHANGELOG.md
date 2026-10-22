@@ -99,18 +99,46 @@ developed. This release adds most of the features of the cross-platform fork
 
 ## 0.1.4 – 2026-10-22
 
+### New
+
 - **NFC readers:** a Proxmark3 or an ESP with a PN5180, found automatically on the USB serial ports. A tag
   put on the reader selects its Tonie and fills in the UID when assigning a UID or creating a Tonie. With the
   Proxmark3 SLIX-L firmware, tags in privacy mode are unlocked and can be read and emulated; the antenna
-  measurement works with any firmware. Not yet tested with real hardware; flashing the Proxmark3 is not
-  supported.
+  measurement works with any firmware.
+
+### Fixed and improved
+
+- None.
+
+### Notes
+
+- The NFC readers are not yet tested with real hardware; flashing the Proxmark3 is not supported.
 
 ## 0.1.3 – 2026-10-20
 
+### New
+
 - Select Tonies by dragging a selection frame in the grid; Ctrl/Cmd adds to the selection.
+
+### Fixed and improved
+
+- None.
+
+### Notes
+
+- None.
 
 ## 0.1.2 – 2026-10-20
 
+### New
+
 - Linux: a desktop entry with icon, installed with `./install-desktop-entry.sh` from the archive.
 - Windows: `teddybench.exe` and `teddy.exe` have the TeddyBench icon.
+
+### Fixed and improved
+
 - Cancelling an export removes the unfinished files.
+
+### Notes
+
+- None.
