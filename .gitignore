@@ -5,3 +5,7 @@
 teddyBench.cfg
 tonies.json
 customTonies.json
+
+# real Tonie files for local tests, never commit them
+/content/
+/Content/

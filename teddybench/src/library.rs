@@ -34,13 +34,14 @@ pub struct Analysis {
 }
 
 impl Analysis {
+    /// Reads the header and the end of the file only, not all its pages.
     pub fn read(path: &Path) -> Result<Analysis, tonie_core::Error> {
-        let file = TonieFile::open(path, false)?;
+        let (header, length) = TonieFile::read_header_and_length(path)?;
         Ok(Analysis {
-            audio_id: file.header.audio_id,
-            hash: file.hash_string(),
-            chapters: file.header.audio_chapters.clone(),
-            total_granules: file.statistics.highest_granule,
+            audio_id: header.audio_id,
+            hash: tonie_core::file::hex_upper(&header.hash),
+            chapters: header.audio_chapters,
+            total_granules: length,
         })
     }
 

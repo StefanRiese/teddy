@@ -81,6 +81,43 @@ impl TonieFile {
         })
     }
 
+    /// The header and the length (highest granule position) of a Tonie file, without walking all its
+    /// pages like [`TonieFile::open`]: only the header block and the end of the file are read, where
+    /// the last page is. Much faster for files on an SD card.
+    pub fn read_header_and_length(path: impl AsRef<Path>) -> Result<(FileHeader, u64), Error> {
+        let path = path.as_ref();
+        let mut file = File::open(path)?;
+        let len = file.metadata()?.len();
+        if len < 2 * BLOCK_SIZE as u64 {
+            return Err(Error::InvalidFile("file too short".into()));
+        }
+        let mut block = vec![0u8; BLOCK_SIZE];
+        file.read_exact(&mut block)?;
+        let header = TonieFile::parse(path, &block)?.header;
+
+        /* the last page that ends exactly at the end of the file */
+        let tail_len = len.min(64 * 1024).min(len - BLOCK_SIZE as u64);
+        let mut tail = vec![0u8; tail_len as usize];
+        file.seek(SeekFrom::Start(len - tail_len))?;
+        file.read_exact(&mut tail)?;
+        let last = (0..tail.len().saturating_sub(PAGE_HEADER_LEN))
+            .rev()
+            .filter(|&i| &tail[i..i + 4] == b"OggS")
+            .find_map(|i| Page::parse(&tail, i).filter(|(_, size)| i + size == tail.len()));
+        let length = match last {
+            Some((page, _)) => page.granule_position,
+            /* unusual layout: walk the pages */
+            None => {
+                let (stats, _) = calculate_statistics(&mut file, len)?;
+                match stats.errors.first() {
+                    Some(e) if stats.highest_granule == 0 => return Err(Error::InvalidFile(e.clone())),
+                    _ => stats.highest_granule,
+                }
+            }
+        };
+        Ok((header, length))
+    }
+
     pub fn hash_string(&self) -> String {
         hex_upper(&self.header.hash)
     }
@@ -329,6 +366,96 @@ pub fn hex_upper(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_header_and_length_from_the_end_of_the_file() {
+        let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/reference");
+        let mut checked = 0;
+        for case in std::fs::read_dir(&reference).unwrap().flatten() {
+            for dir in std::fs::read_dir(case.path()).into_iter().flatten().flatten() {
+                let path = dir.path().join("500304E0");
+                if !path.is_file() {
+                    continue;
+                }
+                let full = TonieFile::open(&path, false).unwrap();
+                let (header, length) = TonieFile::read_header_and_length(&path).unwrap();
+                assert_eq!(header, full.header, "{}", path.display());
+                assert_eq!(length, full.statistics.highest_granule, "{}", path.display());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 5, "{checked}");
+
+        /* not a Tonie file */
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("x"), vec![0u8; 3 * BLOCK_SIZE]).unwrap();
+        assert!(TonieFile::read_header_and_length(dir.path().join("x")).is_err());
+    }
+
+    /// Checks real Tonie files, which cannot be part of the repository:
+    /// `TEDDY_REAL_CONTENT=<CONTENT folder> cargo test -p tonie-core -- --ignored real_tonie_files`
+    #[test]
+    #[ignore]
+    fn real_tonie_files() {
+        let Some(dir) = std::env::var_os("TEDDY_REAL_CONTENT") else {
+            panic!("set TEDDY_REAL_CONTENT to a CONTENT folder");
+        };
+        let mut checked = 0;
+        for sub in std::fs::read_dir(dir).unwrap().flatten() {
+            for file in std::fs::read_dir(sub.path()).into_iter().flatten().flatten() {
+                let path = file.path();
+                let full = TonieFile::open(&path, true).unwrap();
+                let (header, length) = TonieFile::read_header_and_length(&path).unwrap();
+                let name = path.display();
+                assert!(full.hash_correct, "{name}: hash");
+                assert!(full.statistics.errors.is_empty(), "{name}: {:?}", full.statistics.errors);
+                assert_eq!(header, full.header, "{name}: header");
+                assert_eq!(length, full.statistics.highest_granule, "{name}: length");
+
+                /* changing the audio ID and rebuilding with the tracks in reverse order keep every packet */
+                let tracks = full.track_packets().unwrap();
+                assert_eq!(tracks.len(), full.header.audio_chapters.len(), "{name}: tracks");
+                let tmp = tempfile::tempdir().unwrap();
+                let changed_path = tmp.path().join("changed");
+                std::fs::write(&changed_path, full.with_audio_id(0x1234_5678).unwrap()).unwrap();
+                let changed = TonieFile::open(&changed_path, true).unwrap();
+                assert!(changed.hash_correct && changed.statistics.errors.is_empty(), "{name}: changed id");
+                assert_eq!(changed.track_packets().unwrap(), tracks, "{name}: packets after changing the id");
+
+                let sources: Vec<crate::encode::TrackSource> = tracks
+                    .iter()
+                    .rev()
+                    .enumerate()
+                    .map(|(i, p)| crate::encode::TrackSource::Packets {
+                        label: format!("Track {i}"),
+                        packets: p.clone(),
+                    })
+                    .collect();
+                let rebuilt_path = tmp.path().join("rebuilt");
+                let mut out = File::create(&rebuilt_path).unwrap();
+                crate::encode::build(&sources, &crate::encode::EncodeOptions::default(), &mut out, &mut ()).unwrap();
+                drop(out);
+                let rebuilt = TonieFile::open(&rebuilt_path, true).unwrap();
+                assert!(
+                    rebuilt.hash_correct && rebuilt.statistics.errors.is_empty(),
+                    "{name}: rebuilt {:?}",
+                    rebuilt.statistics.errors
+                );
+                let got = rebuilt.track_packets().unwrap();
+                let want: Vec<_> = tracks.iter().rev().cloned().collect();
+                let last = want.len() - 1;
+                assert_eq!(got[..last], want[..last], "{name}: rebuilt tracks");
+                /* the last one gets the closing silent frame */
+                assert!(
+                    got[last].starts_with(&want[last]) && got[last].len() <= want[last].len() + 2,
+                    "{name}: last track"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+        eprintln!("{checked} real Tonie files checked");
+    }
 
     #[test]
     fn changes_the_audio_id_without_reencoding() {
