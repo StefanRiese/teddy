@@ -151,6 +151,8 @@ enum Dialog {
         name: String,
     },
     ConfirmDelete(Vec<PathBuf>),
+    /// Remove the live flag from these Tonies
+    ConfirmRemoveLive(Vec<PathBuf>),
     Export(ExportDialog),
     Message {
         title: String,
@@ -214,6 +216,7 @@ enum Action {
     Stop,
     Seek(f64),
     ToggleLive,
+    RemoveAllLive,
     Rename,
     Delete,
     AssignUid,
@@ -676,6 +679,12 @@ impl TeddyBenchApp {
                 }
                 self.scanner.send(Command::Rescan);
             }
+            Action::RemoveAllLive => {
+                let files: Vec<PathBuf> = self.entries.iter().filter(|e| e.file.live).map(|e| e.file.path.clone()).collect();
+                if !files.is_empty() {
+                    self.dialog = Some(Dialog::ConfirmRemoveLive(files));
+                }
+            }
             Action::Rename => {
                 if let Some(e) = self.single_selected() {
                     match e.analysis() {
@@ -1084,6 +1093,16 @@ impl TeddyBenchApp {
         }
         if full(ui, any, "Delete...") {
             actions.push(Action::Delete);
+        }
+        let any_live = self.entries.iter().any(|e| e.file.live);
+        let remove_live = ui
+            .add_enabled(
+                any_live,
+                egui::Button::new("Remove all live flags...").min_size(Vec2::new(ui.available_width(), 0.0)),
+            )
+            .on_hover_text(format!("Clear the live flag of every Tonie that has it ({})", shortcut_text("L")));
+        if remove_live.clicked() {
+            actions.push(Action::RemoveAllLive);
         }
         ui.separator();
         if full(ui, any, "Save as .ogg...") {
@@ -1538,6 +1557,41 @@ impl TeddyBenchApp {
                 }
                 keep = !(ok || cancel || r.should_close());
             }
+            Dialog::ConfirmRemoveLive(files) => {
+                let names: Vec<String> = files
+                    .iter()
+                    .map(|f| {
+                        self.entries
+                            .iter()
+                            .find(|e| &e.file.path == f)
+                            .map(|e| e.name().trim_start_matches("[live] ").to_string())
+                            .unwrap_or_else(|| f.display().to_string())
+                    })
+                    .collect();
+                let r = egui::Modal::new(Id::unique("remove_live")).show(ctx, |ui| {
+                    ui.set_max_width(500.0);
+                    ui.heading(format!("Remove the live flag from {} Tonie(s)?", files.len()));
+                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                        for n in &names {
+                            ui.label(n.replace('\n', " "));
+                        }
+                    });
+                    ui.horizontal(|ui| (ui.button("Remove").clicked(), ui.button("Cancel").clicked())).inner
+                });
+                let (ok, cancel) = r.inner;
+                if ok {
+                    let errors: Vec<String> = files
+                        .iter()
+                        .filter_map(|f| fsattr::set_live(f, false).err().map(|e| format!("{}: {e}", f.display())))
+                        .collect();
+                    self.scanner.send(Command::Rescan);
+                    if !errors.is_empty() {
+                        self.message("Remove all live flags", errors.join("\n"));
+                        return;
+                    }
+                }
+                keep = !(ok || cancel || r.should_close());
+            }
             Dialog::ConfirmDelete(files) => {
                 let names: Vec<String> = files
                     .iter()
@@ -1870,6 +1924,9 @@ impl TeddyBenchApp {
             if i.key_pressed(egui::Key::Delete) {
                 actions.push(Action::Delete);
             }
+            if i.modifiers.command && i.key_pressed(egui::Key::L) {
+                actions.push(Action::RemoveAllLive);
+            }
         });
 
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -1883,6 +1940,15 @@ impl TeddyBenchApp {
         if !dropped.is_empty() {
             actions.push(Action::Add(dropped));
         }
+    }
+}
+
+/// How the shortcut Ctrl/Cmd + `key` is written on this platform
+fn shortcut_text(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("Cmd+{key}")
+    } else {
+        format!("Ctrl+{key}")
     }
 }
 
@@ -2223,7 +2289,7 @@ impl eframe::App for TeddyBenchApp {
 #[cfg(debug_assertions)]
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
-    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|new` opens a dialog.
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live` opens a dialog.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some((path, started)) = self.screenshot.clone() else { return };
         ctx.request_repaint_after(Duration::from_millis(100));
@@ -2235,6 +2301,7 @@ impl TeddyBenchApp {
                     self.selection.insert(self.entries[i].file.path.clone());
                     match std::env::var("TEDDYBENCH_SCREENSHOT_DIALOG").as_deref() {
                         Ok("export") => self.apply(Action::Export(ExportFormat::Mp3), ctx),
+                        Ok("live") => self.apply(Action::RemoveAllLive, ctx),
                         Ok("layout") => {
                             let s = &self.settings;
                             self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {

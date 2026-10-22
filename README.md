@@ -45,6 +45,7 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
 - Create Tonie files from audio files (MP3, Ogg Opus, FLAC, WAV; also by drag and drop onto the window) with
   track ordering, or add an existing Tonie file.
 - Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
+  **Remove all live flags** (Ctrl+L, on macOS Cmd+L) clears the flag of every Tonie on the card at once.
 - Export the selected Tonies (see [Exporting audio](#exporting-audio)) or their Tonie files, or use
   **Copy to MicroSD** to copy the selected Tonie folders to another SD card.
 - **Custom tag covers:** printable A4 PDFs with round cover images for the selected Tonies
