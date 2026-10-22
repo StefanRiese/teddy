@@ -2604,17 +2604,27 @@ fn track_list<T>(
                 let (title, extra) = cells(row);
                 let sel = *selected == Some(i);
                 let number = ui.selectable_label(sel, format!("{:>2}", i + 1));
-                let name = ui.dnd_drag_source(Id::unique((id, i)), i, |ui| ui.selectable_label(sel, title));
-                if number.clicked() || name.inner.clicked() || name.response.drag_started() {
+                /* the name is clicked to select the track and dragged to move it; one widget for both,
+                 * a drag area on top of the label would take its clicks */
+                let name = ui
+                    .selectable_label(sel, title)
+                    .interact(Sense::click_and_drag())
+                    .on_hover_cursor(egui::CursorIcon::Grab);
+                if name.drag_started() {
+                    egui::DragAndDrop::set_payload(ui.ctx(), i);
+                }
+                if name.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                }
+                if number.clicked() || name.clicked() || name.drag_started() {
                     *selected = Some(i);
                 }
-                let target = number.dnd_release_payload::<usize>().or_else(|| name.response.dnd_release_payload::<usize>());
+                let target = number.dnd_release_payload::<usize>().or_else(|| name.dnd_release_payload::<usize>());
                 if let Some(from) = target {
                     moved = Some((*from, i));
                 }
-                if name.response.dnd_hover_payload::<usize>().is_some() {
-                    ui.painter()
-                        .hline(name.response.rect.x_range(), name.response.rect.top(), ui.visuals().selection.stroke);
+                if name.dnd_hover_payload::<usize>().is_some_and(|from| *from != i) {
+                    ui.painter().hline(name.rect.x_range(), name.rect.top(), ui.visuals().selection.stroke);
                 }
                 ui.label(extra);
                 ui.end_row();
@@ -3024,7 +3034,8 @@ impl eframe::App for TeddyBenchApp {
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
     /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts|audioid|tracks` opens a dialog (`move`: arrow right),
-    /// `TEDDYBENCH_SCREENSHOT_SEARCH=<text>` searches.
+    /// `TEDDYBENCH_SCREENSHOT_SEARCH=<text>` searches,
+    /// `TEDDYBENCH_SCREENSHOT_AFTER=<seconds>` waits longer than 3 s, e.g. to click something first.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some((path, started)) = self.screenshot.clone() else { return };
         ctx.request_repaint_after(Duration::from_millis(100));
@@ -3072,7 +3083,8 @@ impl TeddyBenchApp {
             }
         }
 
-        if elapsed > Duration::from_secs(3) && !ctx.data(|d| d.get_temp::<bool>(Id::unique("screenshot_requested")).unwrap_or(false)) {
+        let after = std::env::var("TEDDYBENCH_SCREENSHOT_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
+        if elapsed > Duration::from_secs_f64(after) && !ctx.data(|d| d.get_temp::<bool>(Id::unique("screenshot_requested")).unwrap_or(false)) {
             ctx.data_mut(|d| d.insert_temp(Id::unique("screenshot_requested"), true));
             let c = ctx.clone();
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
