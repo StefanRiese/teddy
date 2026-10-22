@@ -43,6 +43,8 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
   and your own names from `customTonies.json`; icon size slider, sorting by UID, product number, date or type.
 - **Search** by name, UID, folder or audio ID: start typing anywhere, Esc clears the search. Only the
   Tonies found stay selected, so actions never affect hidden ones.
+- Keyboard: arrow keys, Home and End select the next, first or last Tonie, Space plays or stops it;
+  F1 (*Help → Keyboard shortcuts*) lists all shortcuts.
 - Details of the selected Tonie with its track list, playback with seeking.
 - Create Tonie files from audio files (MP3, Ogg Opus, Ogg Vorbis, FLAC, WAV, M4A; also by drag and drop
   onto the window) with track ordering, or add an existing Tonie file. The new Tonie is named after the tags

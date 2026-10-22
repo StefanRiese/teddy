@@ -163,6 +163,7 @@ enum Dialog {
         text: String,
     },
     About,
+    Shortcuts,
     TagLayout(TagLayoutDraft),
     /// UID and memory of a tag as hex: shown after reading, or entered for the emulation
     TagDump {
@@ -238,6 +239,9 @@ enum Action {
     ToggleLive,
     RemoveAllLive,
     Trashcan,
+    Shortcuts,
+    /// Select the next Tonie in the direction of the arrow key, or the first/last one
+    Move(egui::Key),
     Rename,
     Delete,
     AssignUid,
@@ -281,6 +285,8 @@ pub struct TeddyBenchApp {
     pending_names: HashMap<PathBuf, String>,
     /// Only Tonies matching this are shown
     search: String,
+    /// The rows of the grid as last drawn (entry indices), for moving with the arrow keys
+    grid_rows: Vec<Vec<usize>>,
     player: Option<Player>,
     playing: Option<PathBuf>,
     loading_rx: Option<Receiver<Result<TonieSource, String>>>,
@@ -370,6 +376,7 @@ impl TeddyBenchApp {
             last_audio_id: None,
             pending_names: HashMap::new(),
             search: String::new(),
+            grid_rows: Vec::new(),
             player: None,
             playing: None,
             loading_rx: None,
@@ -644,6 +651,47 @@ impl TeddyBenchApp {
         teddybench::library::matches_query(&[&name, &e.file.uid, &folder, &file, &audio_id], &self.search)
     }
 
+    /// Selects the Tonie next to the current one (the anchor) in the grid as last drawn
+    fn move_selection(&mut self, key: egui::Key) {
+        let rows = &self.grid_rows;
+        let flat: Vec<usize> = rows.iter().flatten().copied().collect();
+        let Some(&first) = flat.first() else { return };
+        /* from the Tonie clicked last, or the selected one */
+        let single = (self.selection.len() == 1).then(|| self.selection.first().cloned()).flatten();
+        let from = self.anchor.clone().filter(|a| self.selection.contains(a)).or(single);
+        let current = from.as_ref().and_then(|a| {
+            rows.iter()
+                .enumerate()
+                .find_map(|(r, row)| row.iter().position(|&i| &self.entries[i].file.path == a).map(|c| (r, c)))
+        });
+        let target = match (current, key) {
+            (_, egui::Key::Home) | (None, _) => first,
+            (_, egui::Key::End) => *flat.last().unwrap(),
+            (Some((r, c)), egui::Key::ArrowLeft | egui::Key::ArrowRight) => {
+                let pos = flat.iter().position(|&i| i == rows[r][c]).unwrap_or(0);
+                let pos = if key == egui::Key::ArrowLeft {
+                    pos.saturating_sub(1)
+                } else {
+                    (pos + 1).min(flat.len() - 1)
+                };
+                flat[pos]
+            }
+            (Some((r, c)), _) => {
+                let r = if key == egui::Key::ArrowUp {
+                    r.saturating_sub(1)
+                } else {
+                    (r + 1).min(rows.len() - 1)
+                };
+                rows[r][c.min(rows[r].len() - 1)]
+            }
+        };
+        let path = self.entries[target].file.path.clone();
+        self.selection = BTreeSet::from([path.clone()]);
+        self.anchor = Some(path.clone());
+        self.scroll_to = Some(path);
+        self.nfc.auto_selected = false;
+    }
+
     /// Deselects the Tonies the search hides, so actions only affect visible ones
     fn deselect_hidden(&mut self) {
         let visible: HashSet<PathBuf> = self.entries.iter().filter(|e| self.matches_search(e)).map(|e| e.file.path.clone()).collect();
@@ -738,6 +786,8 @@ impl TeddyBenchApp {
                 }
                 self.scanner.send(Command::Rescan);
             }
+            Action::Shortcuts => self.dialog = Some(Dialog::Shortcuts),
+            Action::Move(key) => self.move_selection(key),
             Action::Trashcan => {
                 let Some(dir) = self.current_dir.as_deref().and_then(trashcan::find) else {
                     self.message(
@@ -1036,6 +1086,9 @@ impl TeddyBenchApp {
                 if ui.button("Releases page").on_hover_text(RELEASES_URL).clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(RELEASES_URL));
                 }
+                if ui.button("Keyboard shortcuts (F1)").clicked() {
+                    self.dialog = Some(Dialog::Shortcuts);
+                }
                 if ui.button("About").clicked() {
                     self.dialog = Some(Dialog::About);
                 }
@@ -1263,6 +1316,13 @@ impl TeddyBenchApp {
             }
             rows.extend(items.chunks(cols).map(|c| Row::Tiles(c.to_vec())));
         }
+        self.grid_rows = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Tiles(items) => Some(items.clone()),
+                Row::Header(_) => None,
+            })
+            .collect();
         let row_height = |r: &Row| if matches!(r, Row::Header(_)) { HEADER_HEIGHT } else { tile.y + spacing };
         let total: f32 = rows.iter().map(row_height).sum();
 
@@ -1515,6 +1575,21 @@ impl TeddyBenchApp {
                     ui.label(text.as_str());
                     ui.add_space(8.0);
                     ui.button("OK").clicked()
+                });
+                keep = !(r.inner || r.should_close());
+            }
+            Dialog::Shortcuts => {
+                let r = egui::Modal::new(Id::unique("shortcuts")).show(ctx, |ui| {
+                    ui.heading("Keyboard shortcuts");
+                    egui::Grid::new("shortcut_list").num_columns(2).striped(true).show(ui, |ui| {
+                        for (key, what) in shortcut_list() {
+                            ui.monospace(key);
+                            ui.label(what);
+                            ui.end_row();
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.button("Close").clicked() || ui.input(|i| i.key_pressed(egui::Key::F1))
                 });
                 keep = !(r.inner || r.should_close());
             }
@@ -2205,6 +2280,24 @@ impl TeddyBenchApp {
             if i.modifiers.command && i.key_pressed(egui::Key::L) {
                 actions.push(Action::RemoveAllLive);
             }
+            if i.key_pressed(egui::Key::F1) {
+                actions.push(Action::Shortcuts);
+            }
+            if i.key_pressed(egui::Key::Space) {
+                actions.push(if self.playing.is_some() { Action::Stop } else { Action::Play });
+            }
+            for key in [
+                egui::Key::ArrowLeft,
+                egui::Key::ArrowRight,
+                egui::Key::ArrowUp,
+                egui::Key::ArrowDown,
+                egui::Key::Home,
+                egui::Key::End,
+            ] {
+                if i.key_pressed(key) && !i.modifiers.any() {
+                    actions.push(Action::Move(key));
+                }
+            }
         });
 
         /* typing anywhere starts the search, Esc clears it */
@@ -2248,6 +2341,23 @@ impl TeddyBenchApp {
             actions.push(Action::Add(dropped));
         }
     }
+}
+
+/// The keyboard shortcuts for the overview (F1)
+fn shortcut_list() -> Vec<(String, &'static str)> {
+    vec![
+        ("Arrow keys".into(), "Select the next Tonie"),
+        ("Home / End".into(), "Select the first / last Tonie"),
+        ("Space".into(), "Play or stop the selected Tonie"),
+        (shortcut_text("A"), "Select all Tonies shown"),
+        ("F2".into(), "Rename the selected Tonie"),
+        ("Delete".into(), "Delete the selected Tonies"),
+        (shortcut_text("L"), "Remove all live flags"),
+        ("Type text".into(), "Search by name, UID, folder or audio ID"),
+        ("Esc".into(), "Clear the search, close a dialog"),
+        ("Double-click".into(), "Assign a new UID"),
+        ("F1".into(), "This overview"),
+    ]
 }
 
 /// How the shortcut Ctrl/Cmd + `key` is written on this platform
@@ -2601,7 +2711,7 @@ impl eframe::App for TeddyBenchApp {
 #[cfg(debug_assertions)]
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
-    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash` opens a dialog,
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts` opens a dialog (`move`: arrow right),
     /// `TEDDYBENCH_SCREENSHOT_SEARCH=<text>` searches.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some((path, started)) = self.screenshot.clone() else { return };
@@ -2621,6 +2731,8 @@ impl TeddyBenchApp {
                         Ok("export") => self.apply(Action::Export(ExportFormat::Mp3), ctx),
                         Ok("live") => self.apply(Action::RemoveAllLive, ctx),
                         Ok("trash") => self.apply(Action::Trashcan, ctx),
+                        Ok("shortcuts") => self.apply(Action::Shortcuts, ctx),
+                        Ok("move") => self.apply(Action::Move(egui::Key::ArrowRight), ctx),
                         Ok("layout") => {
                             let s = &self.settings;
                             self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {
