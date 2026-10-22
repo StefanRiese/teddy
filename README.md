@@ -4,10 +4,18 @@ Tools for working with the audio files of the Toniebox: dump existing Tonie file
 
 This repository is a fork of [toniebox-reverse-engineering/teddy](https://github.com/toniebox-reverse-engineering/teddy) with additional features, mainly around custom tags (cover printing, random UIDs, alternative NFC reader) and exporting content.
 
-## Components
+## Two implementations
 
-The C# implementation (Windows) is in `csharp/`, a cross-platform port in Rust for Windows, Linux and
-macOS is in `rust/` (see [rust/README.md](rust/README.md)).
+| Directory | What | Platforms | Releases |
+|---|---|---|---|
+| `csharp/` | The original C# TeddyBench and Teddy, described below | Windows | `v*`, e.g. `v1.8.1`: `TeddyBench.zip` |
+| `rust/` | Port to Rust with most of the features, see [rust/README.md](rust/README.md) | Windows, Linux, macOS | `rust-v*` pre-releases, e.g. `rust-v0.1.4` |
+
+Both are on the [releases page](https://github.com/StefanRiese/teddy/releases). The Rust port reads the
+same `teddyBench.cfg`, `customTonies.json` and Tonie files. It is a preview: the NFC readers are not yet
+tested with real hardware and flashing the Proxmark3 is missing, see [rust/TODO.md](rust/TODO.md).
+
+## Components (C#)
 
 | Project (in `csharp/`) | Description |
 |---|---|
@@ -16,7 +24,7 @@ macOS is in `rust/` (see [rust/README.md](rust/README.md)).
 | **TonieAudio** | Library for reading and writing the Tonie file format. |
 | Concentus, Concentus.Oggfile, ID3 | Bundled third-party libraries (Opus codec, Ogg container, ID3 tags). |
 
-## TeddyBench
+## TeddyBench (C#)
 
 ### Features
 
@@ -73,7 +81,7 @@ Settings are stored as JSON in `teddyBench.cfg` next to the executable. The file
 
 Custom names you give to Tonies are stored in `customTonies.json`.
 
-## Teddy (command line)
+## Teddy (C#, command line)
 
 ```
 Teddy.exe -m <mode> [options] <files...>
@@ -111,6 +119,8 @@ The bit rate must be a multiple of 24 kbps, otherwise the output file is incompa
 
 ## Building
 
+### C#
+
 Requirements: Windows, Visual Studio 2022 (or MSBuild) with the .NET Framework 4.8 developer pack.
 
 1. Open `csharp/Teddy.sln` and restore NuGet packages (`nuget restore csharp/Teddy.sln`).
@@ -120,6 +130,13 @@ Requirements: Windows, Visual Studio 2022 (or MSBuild) with the .NET Framework 4
 The GitHub Actions workflow in `.github/workflows/build.yml` builds Debug and Release on every push and uploads `TeddyBench.exe` as an artifact.
 
 Releases: pushing a `v*` tag (or running the workflow manually with an existing release tag) packages `TeddyBench.zip` — `TeddyBench.exe`, its `.config`, the Proxmark3 firmware `fullimage.elf` and `Resources/ffmpeg.exe` — and attaches it to the GitHub release of that tag. TeddyBench's update check looks for that file in this repository's latest release.
+
+### Rust
+
+`cargo build --release` in `rust/`; requirements and details are in [rust/README.md](rust/README.md).
+The workflow `.github/workflows/rust.yml` tests on Windows, Linux and macOS on every push. Pushing a
+`rust-v*` tag publishes a pre-release with the archives for all three platforms; it is never marked as the
+latest release, so the update check of the C# TeddyBench keeps offering the C# version.
 
 ## Credits
 
