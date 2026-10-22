@@ -65,6 +65,7 @@ Implemented so far:
 
 Not yet: flashing the Proxmark3 firmware (use the Proxmark3 tools). Dropped on purpose: the
 automatic update download and diagnostics reports (they were sent to a server of the original project).
+[TODO.md](TODO.md) lists what is missing or not tested yet, mainly around the NFC readers.
 
 Data files (`teddyBench.cfg`, `tonies.json`, `customTonies.json`, `cache/`) are kept next to the program
 (portable, like the C# version); in the macOS app inside `TeddyBench.app/Contents/Data`. If that location
