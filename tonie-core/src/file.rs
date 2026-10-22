@@ -95,6 +95,35 @@ impl TonieFile {
         self.page_granules.last().map(|(p, _)| *p).unwrap_or(0)
     }
 
+    /// The complete file with another audio ID, which is also the serial number of the Ogg stream.
+    /// The audio is not re-encoded: the serial of every page is replaced and its CRC recalculated,
+    /// so the pages keep their size and 4 KiB alignment. Needs the audio (`open(.., true)`).
+    pub fn with_audio_id(&self, audio_id: u32) -> Result<Vec<u8>, Error> {
+        let mut audio = self.audio.clone();
+        if audio.is_empty() {
+            return Err(Error::InvalidFile("the audio was not read".into()));
+        }
+        let mut offset = 0;
+        while offset < audio.len() {
+            let Some((_, size)) = Page::parse(&audio, offset) else {
+                return Err(Error::InvalidFile(format!("no Ogg page at offset 0x{:X}", BLOCK_SIZE + offset)));
+            };
+            let page = &mut audio[offset..offset + size];
+            page[14..18].copy_from_slice(&audio_id.to_le_bytes());
+            page[22..26].fill(0);
+            let checksum = crate::ogg::crc(page);
+            page[22..26].copy_from_slice(&checksum.to_le_bytes());
+            offset += size;
+        }
+
+        let mut header = self.header.clone();
+        header.audio_id = audio_id;
+        header.hash = Sha1::digest(&audio).to_vec();
+        let mut out = header.to_block();
+        out.extend_from_slice(&audio);
+        Ok(out)
+    }
+
     /// The OpusHead/OpusTags pages at the start of the audio.
     fn opus_header_pages(&self) -> Result<(Vec<Page>, usize), Error> {
         let mut pages = Vec::new();
@@ -258,4 +287,46 @@ fn add_tags(pages: &mut [Page], tags: &[String]) {
 
 pub fn hex_upper(data: &[u8]) -> String {
     data.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changes_the_audio_id_without_reencoding() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/reference/album_cbr96/0A0B0C01/500304E0");
+        let original = TonieFile::open(&path, true).unwrap();
+        let bytes = original.with_audio_id(0x1234_5678).unwrap();
+        assert_eq!(bytes.len(), std::fs::metadata(&path).unwrap().len() as usize);
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("500304E0");
+        std::fs::write(&out, &bytes).unwrap();
+        let changed = TonieFile::open(&out, true).unwrap();
+        assert!(changed.hash_correct);
+        assert_eq!(changed.header.audio_id, 0x1234_5678);
+        assert_eq!(changed.header.audio_chapters, original.header.audio_chapters);
+        assert_eq!(changed.header.audio_length, original.header.audio_length);
+        assert_ne!(changed.header.hash, original.header.hash);
+        assert!(changed.statistics.errors.is_empty(), "{:?}", changed.statistics.errors);
+        assert_eq!(changed.statistics.highest_granule, original.statistics.highest_granule);
+
+        /* every page: new serial, valid CRC, same content */
+        let mut offset = 0;
+        let mut pages = 0;
+        while let Some((page, size)) = Page::parse(&changed.audio, offset) {
+            let (old, _) = Page::parse(&original.audio, offset).unwrap();
+            assert_eq!(page.serial, 0x1234_5678);
+            assert_eq!(page.to_bytes(), changed.audio[offset..offset + size], "CRC of page {}", page.sequence);
+            assert_eq!(
+                (page.segments, page.granule_position, page.sequence),
+                (old.segments, old.granule_position, old.sequence)
+            );
+            offset += size;
+            pages += 1;
+        }
+        assert_eq!(offset, changed.audio.len());
+        assert!(pages > 3);
+    }
 }

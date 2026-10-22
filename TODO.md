@@ -30,3 +30,10 @@ Known rough edges:
 - No automated test of the background reader thread and the UI reacting to its events.
 - A tag put on the reader before the SD card is loaded does not select its Tonie afterwards (same as C#).
 - Connecting a Proxmark3 takes a few seconds because the antenna is measured right away (same as C#).
+
+## TRASHCAN
+
+- Not tested with a card from a real Toniebox yet. The layout (`TRASHCAN/<folder>/<name>.043` next to
+  `CONTENT`) is taken from [upstream PR #92](https://github.com/toniebox-reverse-engineering/teddy/pull/92).
+- The trash file names don't tell the tag UID, so restoring always asks for it. PR #92 remembers the UID of
+  Tonies it created in its own, incompatible `customTonies.json` format.

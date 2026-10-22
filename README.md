@@ -46,6 +46,10 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
   track ordering, or add an existing Tonie file.
 - Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
   **Remove all live flags** (Ctrl+L, on macOS Cmd+L) clears the flag of every Tonie on the card at once.
+- **Deleted Tonies (TRASHCAN):** a Toniebox connected to the cloud moves deleted Tonies into the `TRASHCAN`
+  folder next to `CONTENT` instead of deleting them. TeddyBench lists them with name, audio ID, length and
+  deletion date, and restores them for a tag UID (entered, or read with the NFC reader) byte for byte or as
+  a new Tonie with a new audio ID (without re-encoding), or deletes them permanently.
 - Export the selected Tonies (see [Exporting audio](#exporting-audio)) or their Tonie files, or use
   **Copy to MicroSD** to copy the selected Tonie folders to another SD card.
 - **Custom tag covers:** printable A4 PDFs with round cover images for the selected Tonies

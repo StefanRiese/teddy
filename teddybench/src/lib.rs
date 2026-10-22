@@ -14,6 +14,7 @@ pub mod rfid;
 pub mod scanner;
 pub mod settings;
 pub mod tagpdf;
+pub mod trashcan;
 pub mod uid;
 
 /// Version shown in the title and written into exported files

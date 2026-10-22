@@ -15,8 +15,9 @@ use teddybench::rfid::{self, DeviceInfo, Measurement, Reader, ReaderKind};
 use teddybench::scanner::{Command, Event, Scanner};
 use teddybench::settings::{DataDir, Settings};
 use teddybench::tagpdf::{TagLayout, TagSide};
+use teddybench::trashcan::{self, TrashItem};
 use teddybench::uid::{is_valid_uid, random_uid, UID_PREFIX};
-use teddybench::{actions, applog, export, fsattr, tagpdf, VERSION};
+use teddybench::{actions, applog, export, fsattr, tagpdf, uid, VERSION};
 
 const RELEASES_URL: &str = "https://github.com/StefanRiese/teddy/releases";
 use tonie_core::tonies::TonieData;
@@ -167,6 +168,22 @@ enum Dialog {
         error: Option<String>,
     },
     Antenna(Measurement),
+    Trashcan(TrashView),
+}
+
+/// The deleted Tonies in the TRASHCAN folder of the card
+struct TrashView {
+    /// None while the files are read
+    items: Option<Vec<TrashItem>>,
+    rx: Option<Receiver<Vec<TrashItem>>>,
+    selected: Option<usize>,
+    /// UID to restore the selected Tonie for
+    uid: String,
+    /// Restore with a new audio ID instead of byte for byte
+    as_new: bool,
+    confirm_delete: bool,
+    /// Result of the last restore or delete, and whether it failed
+    status: Option<(String, bool)>,
 }
 
 /// What the NFC reader is busy with while a "Tag operation" window is shown
@@ -217,6 +234,7 @@ enum Action {
     Seek(f64),
     ToggleLive,
     RemoveAllLive,
+    Trashcan,
     Rename,
     Delete,
     AssignUid,
@@ -387,6 +405,7 @@ impl TeddyBenchApp {
             match &mut self.dialog {
                 Some(Dialog::AssignUid { uid: u, .. }) => *u = uid.clone(),
                 Some(Dialog::NewTonie(nt)) => nt.uid = uid.clone(),
+                Some(Dialog::Trashcan(t)) => t.uid = uid.clone(),
                 _ => {}
             }
             self.entries.iter().find(|e| e.file.uid.eq_ignore_ascii_case(uid)).map(|e| e.file.path.clone())
@@ -678,6 +697,31 @@ impl TeddyBenchApp {
                     self.message("Toggle live flag", errors.join("\n"));
                 }
                 self.scanner.send(Command::Rescan);
+            }
+            Action::Trashcan => {
+                let Some(dir) = self.current_dir.as_deref().and_then(trashcan::find) else {
+                    self.message(
+                        "Deleted Tonies",
+                        "There is no TRASHCAN folder next to the CONTENT folder. A Toniebox connected to the cloud \
+                         moves deleted Tonies there.",
+                    );
+                    return;
+                };
+                let (tx, rx) = channel();
+                let ctx = ctx.clone();
+                std::thread::spawn(move || {
+                    tx.send(trashcan::scan(&dir)).ok();
+                    ctx.request_repaint();
+                });
+                self.dialog = Some(Dialog::Trashcan(TrashView {
+                    items: None,
+                    rx: Some(rx),
+                    selected: None,
+                    uid: self.nfc.uid.clone().unwrap_or_else(|| UID_PREFIX.into()),
+                    as_new: false,
+                    confirm_delete: false,
+                    status: None,
+                }));
             }
             Action::RemoveAllLive => {
                 let files: Vec<PathBuf> = self.entries.iter().filter(|e| e.file.live).map(|e| e.file.path.clone()).collect();
@@ -1103,6 +1147,9 @@ impl TeddyBenchApp {
             .on_hover_text(format!("Clear the live flag of every Tonie that has it ({})", shortcut_text("L")));
         if remove_live.clicked() {
             actions.push(Action::RemoveAllLive);
+        }
+        if full(ui, has_dir, "Deleted Tonies (TRASHCAN)...") {
+            actions.push(Action::Trashcan);
         }
         ui.separator();
         if full(ui, any, "Save as .ogg...") {
@@ -1557,6 +1604,9 @@ impl TeddyBenchApp {
                 }
                 keep = !(ok || cancel || r.should_close());
             }
+            Dialog::Trashcan(t) => {
+                keep = self.trashcan_ui(ctx, t);
+            }
             Dialog::ConfirmRemoveLive(files) => {
                 let names: Vec<String> = files
                     .iter()
@@ -1735,8 +1785,7 @@ impl TeddyBenchApp {
         let audio_id = if nt.custom_audio_id {
             u32::from_str_radix(nt.audio_id.trim().trim_start_matches("0x"), 16).unwrap_or(0)
         } else {
-            let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
-            now.wrapping_sub(0x5000_0000)
+            new_custom_audio_id()
         };
         let job = self.start_job("Encoding", nt.files.len());
         std::thread::spawn(move || {
@@ -1885,6 +1934,153 @@ impl TeddyBenchApp {
         }
     }
 
+    /// The TRASHCAN window. Returns whether it stays open.
+    fn trashcan_ui(&mut self, ctx: &egui::Context, t: &mut TrashView) -> bool {
+        if let Some(items) = t.rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            t.items = Some(items);
+            t.rx = None;
+        }
+        let mut restore = false;
+        let mut delete = false;
+        let r = egui::Modal::new(Id::unique("trashcan")).show(ctx, |ui| {
+            ui.set_width(760.0);
+            ui.heading("Deleted Tonies (TRASHCAN)");
+            ui.label(
+                egui::RichText::new(
+                    "A Toniebox connected to the cloud moves deleted Tonies into the TRASHCAN folder of the card. \
+                     Their file names don't tell the UID of the tag: enter it, or put the tag on the NFC reader.",
+                )
+                .weak(),
+            );
+            ui.add_space(6.0);
+            let Some(items) = &t.items else {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Reading the TRASHCAN...");
+                });
+                return ui.button("Close").clicked();
+            };
+            if items.is_empty() {
+                ui.label("The TRASHCAN is empty.");
+            }
+            egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                egui::Grid::new("trash_items").striped(true).num_columns(5).show(ui, |ui| {
+                    for h in ["Name", "Audio ID", "Length", "Deleted", "File"] {
+                        ui.label(egui::RichText::new(h).strong());
+                    }
+                    ui.end_row();
+                    for (i, item) in items.iter().enumerate() {
+                        let file = item
+                            .path
+                            .strip_prefix(item.path.parent().and_then(Path::parent).unwrap_or(Path::new("")))
+                            .unwrap_or(&item.path)
+                            .display()
+                            .to_string();
+                        let (name, id, length) = match &item.analysis {
+                            Ok(a) => {
+                                let resolved = self.db.resolve("", a);
+                                let mut name = match resolved.kind {
+                                    Kind::Unknown => "Unknown Tonie".to_string(),
+                                    _ if resolved.name.starts_with("Unnamed Teddy") => "Unnamed Teddy".to_string(),
+                                    _ => resolved.name.replace('\n', " "),
+                                };
+                                if let Some(e) = self.entries.iter().find(|e| e.analysis().is_some_and(|b| b.hash == a.hash)) {
+                                    name += &format!(" (on the card as {})", e.file.uid);
+                                }
+                                (name, format!("0x{:08X}", a.audio_id), format_time(Duration::from_secs_f64(a.duration_secs())))
+                            }
+                            Err(e) => (format!("Not readable: {e}"), String::new(), String::new()),
+                        };
+                        if ui.selectable_label(t.selected == Some(i), name).clicked() {
+                            t.selected = Some(i);
+                            t.confirm_delete = false;
+                        }
+                        ui.label(id);
+                        ui.label(length);
+                        ui.label(format_date(item.deleted));
+                        ui.label(egui::RichText::new(file).weak());
+                        ui.end_row();
+                    }
+                });
+            });
+
+            ui.separator();
+            let selected = t.selected.and_then(|i| items.get(i));
+            let readable = selected.is_some_and(|i| i.analysis.is_ok());
+            ui.add_enabled_ui(readable, |ui| {
+                let uid_ok = uid_field(ui, &mut t.uid);
+                ui.checkbox(&mut t.as_new, "Restore as a new Tonie (new audio ID)").on_hover_text(
+                    "Gives the file a new audio ID, as for a newly created Tonie. The audio is not re-encoded. \
+                     Without this, the file is restored byte for byte.",
+                );
+                ui.horizontal(|ui| {
+                    restore = ui.add_enabled(uid_ok, egui::Button::new("Restore")).clicked();
+                    if t.confirm_delete {
+                        ui.label("Delete it for good?");
+                        delete = ui.button("Yes, delete").clicked();
+                        if ui.button("No").clicked() {
+                            t.confirm_delete = false;
+                        }
+                    } else if ui.button("Delete permanently...").clicked() {
+                        t.confirm_delete = true;
+                    }
+                });
+            });
+            if let Some((text, failed)) = &t.status {
+                let color = if *failed {
+                    Color32::from_rgb(190, 60, 80)
+                } else {
+                    Color32::from_rgb(40, 140, 60)
+                };
+                ui.colored_label(color, text.as_str());
+            }
+            ui.add_space(6.0);
+            ui.button("Close").clicked()
+        });
+
+        let selected = t.selected.and_then(|i| t.items.as_ref()?.get(i).cloned());
+        if let (true, Some(item), Some(dir)) = (restore, &selected, self.current_dir.clone()) {
+            let uid = t.uid.to_ascii_uppercase();
+            let new_id = t.as_new.then(new_custom_audio_id);
+            t.status = Some(match trashcan::restore(&item.path, &uid, &dir, new_id) {
+                Ok(_) => {
+                    /* a new audio ID changes the hash: keep the name */
+                    if let (Some(id), Ok(a)) = (new_id, &item.analysis) {
+                        let name = self.db.resolve(&uid, a);
+                        if name.kind != Kind::Unknown && !name.name.starts_with("Unnamed Teddy") {
+                            if let Some(hash) = Analysis::read(&uid::file_for_uid(&dir, &uid)).ok().map(|n| n.hash) {
+                                self.db.custom_names.insert(hash, name.name);
+                                self.db.save_custom_names(&self.data_dir.custom_tonies_json()).ok();
+                            }
+                        }
+                        applog::info(format!("Restored {} as {uid} with audio ID 0x{id:08X}", item.path.display()));
+                    }
+                    self.scanner.send(Command::Rescan);
+                    self.remove_trash_item(t);
+                    (format!("Restored as the Tonie for {uid}."), false)
+                }
+                Err(e) => (e, true),
+            });
+        }
+        if let (true, Some(item)) = (delete, &selected) {
+            t.status = Some(match trashcan::delete(&item.path) {
+                Ok(()) => {
+                    self.remove_trash_item(t);
+                    (format!("Deleted {}.", item.path.display()), false)
+                }
+                Err(e) => (e, true),
+            });
+        }
+        !(r.inner || r.should_close())
+    }
+
+    fn remove_trash_item(&self, t: &mut TrashView) {
+        if let (Some(items), Some(i)) = (t.items.as_mut(), t.selected.take()) {
+            items.remove(i);
+        }
+        t.confirm_delete = false;
+    }
+
     fn tag_operation_window(&mut self, ctx: &egui::Context) {
         let Some(op) = self.nfc.operation else { return };
         let mut cancel = false;
@@ -1941,6 +2137,12 @@ impl TeddyBenchApp {
             actions.push(Action::Add(dropped));
         }
     }
+}
+
+/// Audio ID for a Tonie made by TeddyBench: the time, below the range of retail Tonies
+fn new_custom_audio_id() -> u32 {
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as u32;
+    now.wrapping_sub(0x5000_0000)
 }
 
 /// How the shortcut Ctrl/Cmd + `key` is written on this platform
@@ -2289,7 +2491,7 @@ impl eframe::App for TeddyBenchApp {
 #[cfg(debug_assertions)]
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
-    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live` opens a dialog.
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash` opens a dialog.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some((path, started)) = self.screenshot.clone() else { return };
         ctx.request_repaint_after(Duration::from_millis(100));
@@ -2302,6 +2504,7 @@ impl TeddyBenchApp {
                     match std::env::var("TEDDYBENCH_SCREENSHOT_DIALOG").as_deref() {
                         Ok("export") => self.apply(Action::Export(ExportFormat::Mp3), ctx),
                         Ok("live") => self.apply(Action::RemoveAllLive, ctx),
+                        Ok("trash") => self.apply(Action::Trashcan, ctx),
                         Ok("layout") => {
                             let s = &self.settings;
                             self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {
