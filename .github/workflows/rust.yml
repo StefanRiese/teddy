@@ -140,6 +140,7 @@ jobs:
 
         - The macOS app is not signed with an Apple Developer ID: the first time, right-click it → Open,
           or run \`xattr -dr com.apple.quarantine /Applications/TeddyBench.app\`.
-        - NFC readers are not supported yet. The C# TeddyBench (v1.x releases) stays available.
+        - NFC readers (Proxmark3, ESP with PN5180) are new in the port and not yet tested with real hardware;
+          flashing the Proxmark3 firmware is not supported. The C# TeddyBench (v1.x releases) stays available.
         NOTES
         gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --title "TeddyBench ${TAG#rust-v} (Rust port, preview)" --notes-file notes.md --prerelease --latest=false --verify-tag
