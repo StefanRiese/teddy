@@ -9,6 +9,8 @@ Releases are tagged `rust-v<version>`. The former C# TeddyBench (`v1.x` releases
   TeddyBench and `teddy -m encode` (upstream issue #52). Tracks exported with *Save as .ogg* or `teddy -m
   decode` come back without any loss. `teddy --reencode` encodes them anyway.
 - README: how to put your own audio on a figure (upstream issue #56).
+- Playback: pause, previous/next track (⏮/⏭, "Track 3/9"), and a click on a track in the details of the
+  Tonie playing jumps to it. Play, pause and stop are icons; Space pauses and continues.
 
 ## 0.1.6 – 2026-10-22
 

@@ -263,6 +263,11 @@ enum Action {
     Shortcuts,
     ChangeAudioId,
     EditTracks,
+    PreviousTrack,
+    Pause,
+    Resume,
+    /// Jump to a track of the Tonie playing, counted from 0
+    PlayTrack(usize),
     /// Select the next Tonie in the direction of the arrow key, or the first/last one
     Move(egui::Key),
     Rename,
@@ -829,6 +834,26 @@ impl TeddyBenchApp {
                 self.scanner.send(Command::Rescan);
             }
             Action::Shortcuts => self.dialog = Some(Dialog::Shortcuts),
+            Action::Pause => {
+                if let Some(p) = &self.player {
+                    p.pause();
+                }
+            }
+            Action::Resume => {
+                if let Some(p) = &self.player {
+                    p.resume();
+                }
+            }
+            Action::PreviousTrack => {
+                if let Some(p) = &self.player {
+                    p.previous_track();
+                }
+            }
+            Action::PlayTrack(track) => {
+                if let Some(p) = &self.player {
+                    p.play_track(track);
+                }
+            }
             Action::EditTracks => {
                 if let Some(e) = self.single_selected() {
                     let path = e.file.path.clone();
@@ -1276,10 +1301,47 @@ impl TeddyBenchApp {
 
             let busy = self.loading_rx.is_some();
             if self.playing.is_some() {
-                if ui.button(if busy { "Loading..." } else { "Stop" }).clicked() {
+                let paused = self.player.as_ref().is_some_and(Player::is_paused);
+                let (icon, hint, action) = if paused {
+                    ("▶", "Continue (Space)", Action::Resume)
+                } else {
+                    ("⏸", "Pause (Space)", Action::Pause)
+                };
+                if ui.add_enabled(!busy, egui::Button::new(icon)).on_hover_text(hint).clicked() {
+                    actions.push(action);
+                }
+                let stop = ui.button("⏹").on_hover_text(if busy { "Loading... (stop)" } else { "Stop" });
+                if stop.clicked() {
                     actions.push(Action::Stop);
                 }
-            } else if ui.add_enabled(self.single_selected().is_some(), egui::Button::new("Play file")).clicked() {
+                if busy {
+                    ui.spinner();
+                }
+                let (track, tracks) = self
+                    .player
+                    .as_ref()
+                    .filter(|_| !busy)
+                    .map(|p| (p.current_track(), p.track_count()))
+                    .unwrap_or_default();
+                if ui
+                    .add_enabled(tracks > 0, egui::Button::new("⏮"))
+                    .on_hover_text("Previous track (the start of this one if it has played for a few seconds)")
+                    .clicked()
+                {
+                    actions.push(Action::PreviousTrack);
+                }
+                if ui.add_enabled(track + 1 < tracks, egui::Button::new("⏭")).on_hover_text("Next track").clicked() {
+                    actions.push(Action::PlayTrack(track + 1));
+                }
+                if tracks > 0 {
+                    ui.label(format!("Track {}/{tracks}", track + 1));
+                }
+            } else if ui
+                .add_enabled(self.single_selected().is_some(), egui::Button::new("▶"))
+                .on_hover_text("Play the selected Tonie (Space)")
+                .on_disabled_hover_text("Select one Tonie to play it")
+                .clicked()
+            {
                 actions.push(Action::Play);
             }
 
@@ -1368,8 +1430,15 @@ impl TeddyBenchApp {
         }
         ui.separator();
 
+        /* the track list jumps within the Tonie playing */
+        let playing_track = self
+            .single_selected()
+            .filter(|e| self.playing.as_ref() == Some(&e.file.path) && self.loading_rx.is_none())
+            .and_then(|_| self.player.as_ref().map(Player::current_track));
         if let Some(e) = self.single_selected() {
-            details(ui, e);
+            if let Some(track) = details(ui, e, playing_track) {
+                actions.push(Action::PlayTrack(track));
+            }
         } else if any {
             ui.label(format!("{} Tonies selected", self.selection.len()));
         }
@@ -2524,7 +2593,12 @@ impl TeddyBenchApp {
                 self.scanner.send(Command::Rescan);
             }
             if i.key_pressed(egui::Key::Space) {
-                actions.push(if self.playing.is_some() { Action::Stop } else { Action::Play });
+                let paused = self.player.as_ref().is_some_and(Player::is_paused);
+                actions.push(match (&self.playing, paused) {
+                    (None, _) => Action::Play,
+                    (Some(_), true) => Action::Resume,
+                    (Some(_), false) => Action::Pause,
+                });
             }
             for key in [
                 egui::Key::ArrowLeft,
@@ -2678,7 +2752,7 @@ fn shortcut_list() -> Vec<(String, &'static str)> {
     vec![
         ("Arrow keys".into(), "Select the next Tonie"),
         ("Home / End".into(), "Select the first / last Tonie"),
-        ("Space".into(), "Play or stop the selected Tonie"),
+        ("Space".into(), "Play the selected Tonie, pause, continue"),
         (shortcut_text("A"), "Select all Tonies shown"),
         ("F2".into(), "Rename the selected Tonie"),
         ("Delete".into(), "Delete the selected Tonies"),
@@ -2930,7 +3004,9 @@ fn tooltip(ui: &mut egui::Ui, e: &Entry) {
     }
 }
 
-fn details(ui: &mut egui::Ui, e: &Entry) {
+/// The details of a Tonie. While it plays (`playing_track`), a click on a track name returns that track.
+fn details(ui: &mut egui::Ui, e: &Entry, playing_track: Option<usize>) -> Option<usize> {
+    let mut clicked = None;
     ui.label(egui::RichText::new(e.name().replace('\n', " ")).strong());
     egui::Grid::new("details").num_columns(2).show(ui, |ui| {
         let mut row = |k: &str, v: String| {
@@ -2962,7 +3038,8 @@ fn details(ui: &mut egui::Ui, e: &Entry) {
     if let (Some(info), Some(a)) = (e.info(), e.analysis()) {
         if !info.tracks.is_empty() {
             ui.add_space(6.0);
-            if info.track_names(a.chapters.len()).is_none() {
+            let fits = info.track_names(a.chapters.len()).is_some();
+            if !fits {
                 /* e.g. a re-release with other tracks than the version the names are for */
                 ui.label(
                     egui::RichText::new(format!(
@@ -2975,13 +3052,24 @@ fn details(ui: &mut egui::Ui, e: &Entry) {
             }
             egui::ScrollArea::vertical().id_salt("tracks").show(ui, |ui| {
                 for (i, t) in info.tracks.iter().enumerate() {
-                    ui.label(format!("{:>2}. {t}", i + 1));
+                    let text = format!("{:>2}. {t}", i + 1);
+                    match playing_track.filter(|_| fits) {
+                        Some(current) => {
+                            if ui.selectable_label(current == i, text).on_hover_text("Play this track").clicked() {
+                                clicked = Some(i);
+                            }
+                        }
+                        None => {
+                            ui.label(text);
+                        }
+                    }
                 }
             });
         }
     }
     ui.add_space(6.0);
     ui.label(egui::RichText::new(e.file.path.display().to_string()).weak().small());
+    clicked
 }
 
 impl eframe::App for TeddyBenchApp {
@@ -3049,7 +3137,7 @@ impl eframe::App for TeddyBenchApp {
 #[cfg(debug_assertions)]
 impl TeddyBenchApp {
     /// `TEDDYBENCH_SCREENSHOT=<file.png>` saves the window after 3 seconds and quits.
-    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts|audioid|tracks` opens a dialog (`move`: arrow right),
+    /// `TEDDYBENCH_SCREENSHOT_SELECT=<n>` selects the n-th Tonie first, `TEDDYBENCH_SCREENSHOT_DIALOG=export|layout|new|live|trash|shortcuts|audioid|tracks` opens a dialog (`play`: plays) (`move`: arrow right),
     /// `TEDDYBENCH_SCREENSHOT_SEARCH=<text>` searches,
     /// `TEDDYBENCH_SCREENSHOT_AFTER=<seconds>` waits longer than 3 s, e.g. to click something first.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
@@ -3074,6 +3162,7 @@ impl TeddyBenchApp {
                         Ok("move") => self.apply(Action::Move(egui::Key::ArrowRight), ctx),
                         Ok("audioid") => self.apply(Action::ChangeAudioId, ctx),
                         Ok("tracks") => self.apply(Action::EditTracks, ctx),
+                        Ok("play") => self.apply(Action::Play, ctx),
                         Ok("layout") => {
                             let s = &self.settings;
                             self.dialog = Some(Dialog::TagLayout(TagLayoutDraft {
@@ -3099,6 +3188,24 @@ impl TeddyBenchApp {
             }
         }
 
+        /* TEDDYBENCH_SCREENSHOT_TRACK=<n>: jump to track n (from 1) of the Tonie playing */
+        if let Ok(n) = std::env::var("TEDDYBENCH_SCREENSHOT_TRACK").map(|n| n.parse::<usize>().unwrap_or(1)) {
+            let id = Id::unique("screenshot_track_done");
+            let ready = self.playing.is_some() && self.loading_rx.is_none() && elapsed > Duration::from_millis(3500);
+            if ready && !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
+                ctx.data_mut(|d| d.insert_temp(id, true));
+                self.apply(Action::PlayTrack(n - 1), ctx);
+            }
+        }
+        /* TEDDYBENCH_SCREENSHOT_PAUSE=1: pause the Tonie playing */
+        if std::env::var_os("TEDDYBENCH_SCREENSHOT_PAUSE").is_some() {
+            let id = Id::unique("screenshot_pause_done");
+            let ready = self.playing.is_some() && self.loading_rx.is_none() && elapsed > Duration::from_millis(3500);
+            if ready && !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
+                ctx.data_mut(|d| d.insert_temp(id, true));
+                self.apply(Action::Pause, ctx);
+            }
+        }
         let after = std::env::var("TEDDYBENCH_SCREENSHOT_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
         if elapsed > Duration::from_secs_f64(after) && !ctx.data(|d| d.get_temp::<bool>(Id::unique("screenshot_requested")).unwrap_or(false)) {
             ctx.data_mut(|d| d.insert_temp(Id::unique("screenshot_requested"), true));
