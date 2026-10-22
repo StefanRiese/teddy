@@ -1,76 +1,118 @@
 # Teddy / TeddyBench
 
-Tools for working with the audio files of the Toniebox: dump existing Tonie files, decode them to Ogg/MP3, or create your own custom content.
+Tools for working with the audio files of the Toniebox: dump existing Tonie files, decode them to Ogg/MP3,
+or create your own custom content. For Windows, Linux and macOS.
 
-This repository is a fork of [toniebox-reverse-engineering/teddy](https://github.com/toniebox-reverse-engineering/teddy) with additional features, mainly around custom tags (cover printing, random UIDs, alternative NFC reader) and exporting content.
-
-## Two implementations
-
-| Directory | What | Platforms | Releases |
-|---|---|---|---|
-| `csharp/` | The original C# TeddyBench and Teddy, described below | Windows | `v*`, e.g. `v1.8.1`: `TeddyBench.zip` |
-| `rust/` | Port to Rust with most of the features, see [rust/README.md](rust/README.md) | Windows, Linux, macOS | `rust-v*` pre-releases, e.g. `rust-v0.1.4` |
-
-Both are on the [releases page](https://github.com/StefanRiese/teddy/releases). The Rust port reads the
-same `teddyBench.cfg`, `customTonies.json` and Tonie files. It is a preview: the NFC readers are not yet
-tested with real hardware and flashing the Proxmark3 is missing, see [rust/TODO.md](rust/TODO.md).
-
-## Components (C#)
-
-| Project (in `csharp/`) | Description |
+| Tool | Description |
 |---|---|
-| **TeddyBench** | Windows GUI. Browse the `CONTENT` folder of a Toniebox SD card, play, export, encode and manage Tonie files, and work with NFC tags. |
-| **Teddy** | Command-line tool for decoding, encoding, inspecting and renaming Tonie files. |
-| **TonieAudio** | Library for reading and writing the Tonie file format. |
-| Concentus, Concentus.Oggfile, ID3 | Bundled third-party libraries (Opus codec, Ogg container, ID3 tags). |
+| **TeddyBench** | GUI. Browse the `CONTENT` folder of a Toniebox SD card, play, export, encode and manage Tonie files, and work with NFC tags. |
+| **teddy** | Command-line tool for decoding, encoding, inspecting and renaming Tonie files. |
 
-## TeddyBench (C#)
+This repository is a fork of [toniebox-reverse-engineering/teddy](https://github.com/toniebox-reverse-engineering/teddy),
+rewritten in Rust. The original C# implementation for Windows (`TeddyBench.exe`, `Teddy.exe`) was removed;
+its last releases (`v1.x`) stay on the releases page, and its code is in the git history up to the 0.1.4
+release. The settings, custom names and Tonie files are compatible, so you can switch at any time.
+[TODO.md](TODO.md) lists what is still missing or untested.
+
+## Download
+
+The [releases page](https://github.com/StefanRiese/teddy/releases) has the `rust-v*` releases, currently
+pre-releases:
+
+| File | Platform |
+|---|---|
+| `teddy-rust-windows-x64.zip` | Windows (64 bit) |
+| `teddy-rust-macos-universal.dmg` | macOS 11 or later, Apple Silicon and Intel |
+| `teddy-rust-linux-x64.tar.gz` | Linux (x86-64, needs ALSA for playback) |
+
+Each download contains TeddyBench and `teddy`.
+
+- **macOS:** drag TeddyBench.app into Applications. The app is not signed with an Apple Developer ID: the
+  first time, right-click it → Open, or run `xattr -dr com.apple.quarantine /Applications/TeddyBench.app`.
+- **Linux:** `./install-desktop-entry.sh` in the unpacked archive adds TeddyBench with its icon to the
+  application menu of the current user (`--uninstall` removes it again).
+
+## TeddyBench
+
+`teddybench [directory]` opens the given `CONTENT` directory, a `Content` folder next to the program (handy
+for a local working copy), or the first SD card with a `CONTENT` folder that shows up.
 
 ### Features
 
-- Automatically detects a Toniebox SD card (a drive with a `CONTENT` folder) and lists all Tonies with title and cover image, using `tonies.json` from [api.revvox.de](https://api.revvox.de/tonies.json).
-- If a `Content` folder exists next to `TeddyBench.exe`, it is opened on startup, which is handy for a local working copy.
-- Create custom Tonie files from MP3/Ogg files, rename entries, toggle the live flag, delete files.
-- Export the selected Tonies (see [Exporting audio](#exporting-audio)), or use **Copy to MicroSD** to copy the selected Tonie folders to another location such as an SD card.
-- Assign a new UID or a **random UID** to a Tonie file.
-- **Custom tag covers:** generate a printable PDF with round cover images for the selected Tonies (*Custom tag → Create tag cover*), and a matching backside with series name and model number (*Custom tag → Create tag backside*).
-- NFC support for reading tag UIDs and dumping/emulating tags with a Proxmark3 or a PN5180-based ESP reader (see below).
-- *Options* menu: enable/disable downloading `tonies.json` on startup, download it now, show the debug window.
+- Cover grid with names and covers from `tonies.json` ([api.revvox.de](https://api.revvox.de/tonies.json))
+  and your own names from `customTonies.json`; icon size slider, sorting by UID, product number, date or type.
+- Details of the selected Tonie with its track list, playback with seeking.
+- Create Tonie files from audio files (MP3, Ogg Opus, FLAC, WAV; also by drag and drop onto the window) with
+  track ordering, or add an existing Tonie file.
+- Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
+- Export the selected Tonies (see [Exporting audio](#exporting-audio)) or their Tonie files, or use
+  **Copy to MicroSD** to copy the selected Tonie folders to another SD card.
+- **Custom tag covers:** printable A4 PDFs with round cover images for the selected Tonies
+  (*Custom tag → Create tag cover*, full resolution covers where available), and a matching backside with
+  series name and model number (*Custom tag → Create tag backside*). *Custom tag → Print layout* sets
+  sizes, gaps and where to start on a partly used sheet.
+- NFC readers, see [NFC readers](#nfc-readers).
+- *Options*: download `tonies.json` on startup or now, show the debug window with the background messages.
+  *Help → Releases page* links to the releases.
+
+The live flag is the FAT hidden attribute of the Tonie file. On Linux it can only be changed on the SD card
+itself (vfat), not on a copy on another file system.
 
 ### Exporting audio
 
-Select one or more Tonies and use one of the buttons next to the list:
+Select one or more Tonies and export them:
 
-| Button | What it does |
-|---|---|
-| **Save as .ogg...** | Dumps the tracks as `Track_01.ogg`, `Track_02.ogg`, … |
-| **Save as .mp3...** | Converts each track to MP3 with ffmpeg, one track after another. |
-| **Save as .mp3 (fast)...** | Same as above, but converts the tracks in parallel (up to one ffmpeg process per CPU core). |
-| **Save as .mp3 (native)...** | Converts in-process with the built-in LAME encoder (NAudio.Lame), also in parallel. Doesn't need `ffmpeg.exe`. |
-| **Update covers...** | Downloads the cover image again into folders that were already exported, without touching the audio. |
+- **.ogg:** dumps the tracks as `Track_01.ogg`, `Track_02.ogg`, …
+- **.mp3:** converts the tracks to MP3 in parallel, with ID3v2.3 tags: artist (series), album (episode),
+  track title from `tonies.json`, track number (`3/12`) and the cover as embedded album art. A track's
+  `.ogg` is only deleted after its MP3 was written successfully.
+- **Update covers:** downloads the cover image again into folders that were already exported, without
+  touching the audio.
 
-Exports run in the background with a progress dialog and can be cancelled. The folder dialog starts in an `Export` folder next to `TeddyBench.exe`. You can choose whether each Tonie gets its own subfolder. Each export folder also gets a `cover.jpg`/`cover.png`. Covers are cached in `cache/covers`, and if the download fails the list-view thumbnail is used instead. Tonies whose folder already contains MP3 files and no unconverted `.ogg` files are skipped, so an interrupted or partly failed batch can be restarted.
-
-All three MP3 modes write ID3v2.3 tags: artist (series), album (episode), track title from `tonies.json`, track number (`3/12`) and the cover as embedded album art. A track's `.ogg` is only deleted after its MP3 was written successfully; in the ffmpeg modes, a track whose cover image ffmpeg rejects is converted again without embedded art.
+Exports run in the background with a progress dialog and can be cancelled. You can choose whether each
+Tonie gets its own subfolder; each folder also gets a `cover.jpg`/`cover.png`. Tonies whose folder already
+contains MP3 files and no unconverted `.ogg` files are skipped, so an interrupted or partly failed batch can
+be restarted. Exports go to an `Export` folder next to the program on Windows and Linux
+(`~/Music/TeddyBench Export` on macOS, or if the program directory is read-only); the folder chosen last is
+remembered.
 
 ### NFC readers
 
-Select the reader with `NfcType` in `teddyBench.cfg`:
+Enable the reader and choose its type in the *NFC reader* menu. It is searched on the USB serial ports; the
+UID of a tag put on it selects its Tonie and is filled in when assigning a UID or creating a Tonie.
+`TEDDYBENCH_NFC_PORT=<port>` uses that port instead of searching. On Linux the user needs to be in the
+`dialout` group.
 
-- **`Proxmark3`** (default): a Proxmark3 running the SLIX-L enabled firmware. Supports reading UIDs, unlocking tags in privacy mode, dumping, emulating, antenna measurement and firmware flashing.
-- **`Pn5180Esp`**: an ESP microcontroller with a PN5180 NFC module, connected via USB serial at 115200 baud. TeddyBench detects it by sending `v` and expecting a response containing `Pn5180Esp`; `i` returns the 16-character tag UID and `u` unlocks a tag in privacy mode (reply `ok`).
+- **Proxmark3:** unlocking tags in privacy mode needs the firmware with the
+  [SLIX-L features](https://github.com/g3gg0/proxmark3/tree/iso15693_slix_l_features), as do reading and
+  emulating tags and the console mode (*NFC reader → Advanced actions*). The antenna measurement works with
+  any firmware. Flash the firmware with the Proxmark3 tools.
+- **ESP with PN5180:** an ESP microcontroller with a PN5180 NFC module, connected via USB serial at
+  115200 baud. TeddyBench detects it by sending `v` and expecting a response containing `Pn5180Esp`; `i`
+  returns the 16-character tag UID and `u` unlocks a tag in privacy mode (reply `ok`).
 
-### Configuration
+### Data files and settings
 
-Settings are stored as JSON in `teddyBench.cfg` next to the executable. The file is created on first start; edit it while TeddyBench is closed.
+`teddyBench.cfg`, `tonies.json`, `customTonies.json` and the image cache (`cache/`) are kept next to the
+program; in the macOS app inside `TeddyBench.app/Contents/Data`. If that location is read-only (e.g.
+`Program Files`, or macOS running a downloaded app before it was moved to Applications), the user's data
+directory is used instead: `%APPDATA%\TeddyBench\data` on Windows, `~/Library/Application Support/TeddyBench`
+on macOS, `~/.local/share/teddybench` on Linux. *Options* shows the directory in use.
+
+On macOS, replacing TeddyBench.app with a new version also replaces `Contents/Data`. Copy
+`customTonies.json` and `teddyBench.cfg` over to keep custom names and settings.
+
+The settings are JSON; most of them can be changed in the menus. Edit the file while TeddyBench is closed.
 
 | Setting | Default | Description |
 |---|---|---|
 | `NfcEnabled` | `false` | Enable the NFC reader. |
 | `NfcType` | `"Proxmark3"` | NFC reader type: `"Proxmark3"` or `"Pn5180Esp"`. |
-| `DebugWindow` | `false` | Show the debug log window. |
+| `DebugWindow` | `false` | Show the debug window. |
 | `DownloadJson` | `true` | Download `tonies.json` on startup. Set to `false` to keep a locally modified `tonies.json` (it is still downloaded if missing). |
 | `CacheImageSize` | `256` | Resolution of cached cover images in pixels. |
+| `IconSize` | `128` | Size of the covers in the grid, in pixels. |
+| `SortBy` | `"Date"` | Sort order: `"UID"`, `"Product"`, `"Date"` or `"Type"`. |
 | `CustomTagNonPrintableMargin` | `15` | Page margin the printer cannot print on, in mm. |
 | `CustomTagGapX` / `CustomTagGapY` | `5` | Horizontal / vertical gap between two covers, in mm. |
 | `CustomTagInitialColumn` / `CustomTagInitialRow` | `0` | Position of the first cover on the first page, so you can reuse a partially printed sheet. |
@@ -79,70 +121,107 @@ Settings are stored as JSON in `teddyBench.cfg` next to the executable. The file
 | `CustomTagCoverFilename` | `"CustomTagCover.pdf"` | File name of the generated cover PDF. |
 | `CustomTagBacksideFilename` | `"CustomTagBackside.pdf"` | File name of the generated backside PDF. |
 
-Custom names you give to Tonies are stored in `customTonies.json`.
-
-## Teddy (C#, command line)
+## teddy (command line)
 
 ```
-Teddy.exe -m <mode> [options] <files...>
+teddy -m info <toniefile|directory>
+teddy -m decode [-s] [-o <dir>] <toniefile|directory>
+teddy -m encode [-o <file|dir>] [-i <audio id>] [-b <kbps>] [--vbr] [-p <prefix dir>] <folder | files...>
+teddy -m rename [-y] [-d] <source dir> <dest dir>
 ```
-
-The Rust port's `teddy` takes the same options and works the same way, also on Linux and macOS (use `/` in
-paths there). It additionally accepts Ogg Opus, FLAC and WAV for `encode`, has `-V`/`--version`, and
-fixes a few bugs, e.g. folders are ordered by the ID3 track number and the exit code is non-zero when
-something failed; see [Differences from Teddy.exe](rust/README.md#differences-from-teddyexe).
 
 | Option | Description |
 |---|---|
-| `-m`, `--mode=` | Operating mode: `info`, `decode`, `encode`, `rename` |
-| `-o`, `--output=` | Where to write the file(s) to |
-| `-p`, `--prefix=` | encode: location of prefix files |
-| `-i`, `--id=` | encode: AudioID to use (default: current time) |
-| `-b`, `--bitrate=` | encode: Opus bit rate in kbps |
+| `-m`, `--mode` | Operating mode: `info`, `decode`, `encode`, `rename` |
+| `-o`, `--output` | Where to write the file(s) to |
+| `-p`, `--prefix` | encode: location of prefix files |
+| `-i`, `--id` | encode: AudioID to use (default: current time) |
+| `-b`, `--bitrate` | encode: Opus bit rate in kbps |
 | `--vbr` | encode: use VBR encoding |
 | `-s` | decode: export as a single `.ogg` file |
 | `-y` | rename: actually rename files (otherwise dry run) |
 | `-d` | rename: delete duplicates |
-| `-w`, `--write=` | info: write updated JSON to a local file |
-| `-j`, `--json=` | JSON file/URL with details about Tonies |
-| `-f`, `--format=` | Output details as `csv`, `json` or `text` |
+| `-w`, `--write` | info: write updated JSON to a local file |
+| `-j`, `--json` | JSON file/URL with details about Tonies (default: downloaded from api.revvox.de) |
+| `-f`, `--format` | Output details as `csv`, `json` or `text` |
 | `-v` | Increase debug verbosity |
 | `-h`, `--help` | Show help |
+| `-V`, `--version` | Show the version |
 | `--license` | Show licenses and disclaimer |
 
 Examples:
 
 ```
-Teddy.exe -m info 500304E0                              Show header details
-Teddy.exe -m decode -o out\ 500304E0                    Dump the audio as .ogg files
-Teddy.exe -m encode -o 500304E0 track1.mp3 track2.mp3   Create a Tonie file from MP3 files
-Teddy.exe -m encode -o out\ my-album\                   Create a Tonie file from all MP3s in a folder
-Teddy.exe -m rename <source dir> <destination dir>      Move Tonie files to readable names (dry run without -y)
+teddy -m info 500304E0                              Show header details
+teddy -m decode -o out/ 500304E0                    Dump the audio as .ogg files
+teddy -m encode -o 500304E0 track1.mp3 track2.mp3   Create a Tonie file from audio files
+teddy -m encode -o out/ my-album/                   Create a Tonie file from all audio files in a folder
+teddy -m rename <source dir> <destination dir>      Move Tonie files to readable names (dry run without -y)
 ```
 
-The bit rate must be a multiple of 24 kbps, otherwise the output file is incompatible. Prefix files (`0001.mp3`, `0002.mp3`, …) in the `--prefix` location are prepended to the matching track, e.g. to announce the track number.
+`encode` reads MP3, Ogg Opus, FLAC and WAV files; the files of a folder are ordered by their ID3 track
+number. The bit rate must be a multiple of 24 kbps, otherwise the output file is incompatible. Prefix files
+(`0001.mp3`, `0002.mp3`, …) in the `--prefix` location are prepended to the matching track, e.g. to announce
+the track number.
 
 ## Building
 
-### C#
+```
+cargo build --release
+```
 
-Requirements: Windows, Visual Studio 2022 (or MSBuild) with the .NET Framework 4.8 developer pack.
+| Crate | Description |
+|---|---|
+| `tonie-core` | Reading and writing Tonie files: header, Ogg page layout, decode, encode, `info` reports, `tonies.json` |
+| `teddy` | Command-line tool |
+| `teddybench` | GUI (egui) |
 
-1. Open `csharp/Teddy.sln` and restore NuGet packages (`nuget restore csharp/Teddy.sln`).
-2. For the ffmpeg-based MP3 exports, extract `csharp/TeddyBench/Resources/ffmpeg.zip` into `csharp/TeddyBench/Resources/` so that `ffmpeg.exe` exists there. It is only shipped as a zip because the executable exceeds GitHub's file size limit, and the extracted file is git-ignored. The native MP3 export doesn't need it: its `libmp3lame` DLLs (`csharp/TeddyBench/Native/`) are embedded into `TeddyBench.exe` by Costura.
-3. Build the solution, e.g. `msbuild csharp/Teddy.sln -t:rebuild -p:Configuration=Release`.
+libopus and LAME are compiled from source, which needs CMake and a C compiler. On Linux, audio playback also
+needs the ALSA headers (`libasound2-dev` on Debian/Ubuntu). On macOS, `packaging/macos/bundle.sh <file.dmg>`
+builds TeddyBench.app and `teddy` as universal binaries (Apple Silicon and Intel) and packs them into a disk
+image.
 
-The GitHub Actions workflow in `.github/workflows/build.yml` builds Debug and Release on every push and uploads `TeddyBench.exe` as an artifact.
+The workflow `.github/workflows/rust.yml` checks formatting, runs clippy and the tests on Windows, Linux and
+macOS and builds the downloads on every push. Pushing a `rust-v*` tag publishes them as a pre-release.
 
-Releases: pushing a `v*` tag (or running the workflow manually with an existing release tag) packages `TeddyBench.zip` — `TeddyBench.exe`, its `.config`, the Proxmark3 firmware `fullimage.elf` and `Resources/ffmpeg.exe` — and attaches it to the GitHub release of that tag. TeddyBench's update check looks for that file in this repository's latest release.
+## Tests
 
-### Rust
+`cargo test` compares the output with the original C# `Teddy.exe`, stored in `tests/fixtures/reference`.
+Those files were generated from the synthetic inputs in `tests/fixtures/inputs` (`make_inputs.sh`) with
+`generate_reference.ps1` and `Teddy.exe`, which is in the git history up to the 0.1.4 release.
 
-`cargo build --release` in `rust/`; requirements and details are in [rust/README.md](rust/README.md).
-The workflow `.github/workflows/rust.yml` tests on Windows, Linux and macOS on every push. Pushing a
-`rust-v*` tag publishes a pre-release with the archives for all three platforms; it is never marked as the
-latest release, so the update check of the C# TeddyBench keeps offering the C# version.
+- `info` (text, CSV, JSON) and `decode` output match byte for byte.
+- The Ogg page layout matches byte for byte: the reference's Opus packets are replayed through the page
+  writer. The Opus packets themselves differ, because libopus is used instead of Concentus.
+- Encoded files are compared structurally: header, chapters, segments per page, duration.
+
+## Differences from the C# version
+
+Intentional fixes:
+
+- **Track order:** folders are sorted by the ID3 track number. Teddy.exe could not read track numbers with a
+  NUL terminator (as written by ffmpeg and many taggers) and silently fell back to file name order.
+- **Ogg input:** `.ogg` files are always decoded at 48 kHz. Teddy.exe used the bit rate as decoder sample
+  rate, so encoding Ogg files only worked with `-b 48`.
+- **End of each file:** Teddy.exe encoded up to 60 ms of stale audio after every source file (and prefix
+  file). Files encoded now are that much shorter.
+- **`info -f json`** writes valid JSON (no separator before the first entry).
+- **Exit code** is non-zero when something failed; a failed encode leaves no partial file behind.
+- More input formats: MP3, Ogg Opus, FLAC and WAV (Teddy.exe: MP3 and Ogg).
+- The tag backside PDF is saved as `CustomTagBacksideFilename`; the C# version overwrote the cover PDF.
+- Removing a tag from an ESP with PN5180 deselects its Tonie again, like with a Proxmark3.
+
+Other differences:
+
+- Resampling (rubato) and MP3 decoding (symphonia) differ from Windows Media Foundation/ACM, so the encoded
+  audio is not bit-identical.
+- The progress dots of `encode` depend on the decoder and differ slightly.
+- `--license` lists the Rust dependencies instead of the .NET ones.
+- Not available: flashing the Proxmark3 firmware and the ffmpeg-based MP3 modes (the MP3 export works like
+  the former "native" mode). Dropped on purpose: the automatic update download and the diagnostics reports,
+  which were sent to a server of the original project.
 
 ## Credits
 
-Based on the work of the [toniebox-reverse-engineering](https://github.com/toniebox-reverse-engineering) community and [Hasenpups/teddy](https://github.com/Hasenpups/teddy).
+Based on the work of the [toniebox-reverse-engineering](https://github.com/toniebox-reverse-engineering)
+community and [Hasenpups/teddy](https://github.com/Hasenpups/teddy).

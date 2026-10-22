@@ -1,18 +1,16 @@
-name: Rust port
+name: Build
 
 on:
   push:
     branches: [ "*" ]
     # rust-v1.2.3 publishes a release (paths are not checked for tags)
     tags: [ "rust-v*" ]
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust.yml"
+    paths-ignore:
+      - "**.md"
   pull_request:
     branches: [ "master" ]
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust.yml"
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
 permissions:
@@ -30,10 +28,6 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
     - name: Checkout
       uses: actions/checkout@v7
@@ -47,8 +41,6 @@ jobs:
 
     - name: Cache
       uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: rust
 
     - name: Check formatting
       if: matrix.os == 'ubuntu-latest'
@@ -103,7 +95,7 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: teddy-rust-${{ runner.os }}-${{ runner.arch }}
-        path: rust/dist/*
+        path: dist/*
         if-no-files-found: error
 
   release:
@@ -120,14 +112,14 @@ jobs:
         pattern: teddy-rust-*
         merge-multiple: true
 
-    # pre-release and never "latest": the C# TeddyBench update check offers the latest release
+    # pre-release and never "latest" while the port is a preview
     - name: Publish release
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ github.ref_name }}
       run: |
         cat > notes.md <<NOTES
-        Cross-platform port of Teddy and TeddyBench (Rust), built from \`${GITHUB_SHA::7}\`.
+        Teddy and TeddyBench for Windows, Linux and macOS, built from \`${GITHUB_SHA::7}\`.
 
         | File | Platform |
         |---|---|
@@ -140,7 +132,7 @@ jobs:
 
         - The macOS app is not signed with an Apple Developer ID: the first time, right-click it → Open,
           or run \`xattr -dr com.apple.quarantine /Applications/TeddyBench.app\`.
-        - NFC readers (Proxmark3, ESP with PN5180) are new in the port and not yet tested with real hardware;
-          flashing the Proxmark3 firmware is not supported. The C# TeddyBench (v1.x releases) stays available.
+        - NFC readers (Proxmark3, ESP with PN5180) are not yet tested with real hardware;
+          flashing the Proxmark3 firmware is not supported.
         NOTES
         gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --title "TeddyBench ${TAG#rust-v} (Rust port, preview)" --notes-file notes.md --prerelease --latest=false --verify-tag

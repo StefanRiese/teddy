@@ -1,15 +1,7 @@
-﻿################################################################################
-# Diese .gitignore-Datei wurde von Microsoft(R) Visual Studio automatisch erstellt.
-################################################################################
-
-/.vs
-/csharp/.vs
-/csharp/*/bin
-/csharp/*/obj
-/csharp/packages
-*.user
+/target
+/dist
 
 # Local runtime files
 teddyBench.cfg
 tonies.json
-csharp/TeddyBench/Resources/ffmpeg.exe
+customTonies.json
