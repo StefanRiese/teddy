@@ -8,6 +8,8 @@ or create your own custom content. For Windows, Linux and macOS.
 | **TeddyBench** | GUI. Browse the `CONTENT` folder of a Toniebox SD card, play, export, encode and manage Tonie files, and work with NFC tags. |
 | **teddy** | Command-line tool for decoding, encoding, inspecting and renaming Tonie files. |
 
+![TeddyBench with the Tonies of an SD card, sorted by type, and the details of the selected one](docs/teddybench.png)
+
 This repository is a fork of [toniebox-reverse-engineering/teddy](https://github.com/toniebox-reverse-engineering/teddy),
 rewritten in Rust. The original C# implementation for Windows (`TeddyBench.exe`, `Teddy.exe`) was removed;
 its last releases (`v1.x`) stay on the releases page, and its code is in the git history up to the 0.1.4
