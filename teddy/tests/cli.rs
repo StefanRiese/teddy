@@ -110,7 +110,7 @@ fn encode_output_matches_reference() {
     let runs: &[(&str, &[&str])] = &[
         ("mono22k", &["-i", "0x0E03421A", "inputs/mono22k.mp3"]),
         ("files_order", &["-i", "0x5E03421D", "inputs/album/c_end.mp3", "inputs/mono22k.mp3"]),
-        ("opus_input", &["-i", "0x5E03421C", "-b", "48", "inputs/opus_input.ogg"]),
+        ("opus_input", &["-i", "0x5E03421C", "-b", "48", "--reencode", "inputs/opus_input.ogg"]),
     ];
     for (case, args) in runs {
         let dir = CASES.iter().find(|(c, _)| c == case).unwrap().1;

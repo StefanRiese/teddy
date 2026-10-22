@@ -50,6 +50,9 @@ struct Args {
     /// encode: Use VBR encoding
     #[arg(long)]
     vbr: bool,
+    /// encode: Encode Ogg Opus files again instead of copying them unchanged
+    #[arg(long)]
+    reencode: bool,
     /// decode: Export as single .ogg file
     #[arg(short = 's')]
     single: bool,
@@ -422,6 +425,7 @@ fn mode_encode(args: &Args) -> bool {
         bitrate: args.bitrate * 1000,
         vbr: args.vbr,
         prefix_dir: args.prefix.clone(),
+        copy_opus: !args.reencode,
     };
 
     let result = (|| -> Result<(), Error> {

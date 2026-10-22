@@ -15,7 +15,7 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
-use crate::writer::{CHANNELS, SAMPLE_RATE};
+use crate::writer::{CHANNELS, FRAME_SAMPLES, SAMPLE_RATE};
 use crate::Error;
 
 /// File extensions accepted as encoder input
@@ -99,6 +99,38 @@ fn decode_ogg_opus(path: &Path, sink: &mut dyn FnMut(&[f32]) -> Result<(), Error
         progress(count.get() as f64 / total as f64);
     }
     Ok(())
+}
+
+/// The Opus packets of an Ogg Opus file that can go into a Tonie file as they are, without
+/// re-encoding: stereo, and every packet 20 ms like the frames the Toniebox uses. `None` for other
+/// files, they are encoded. Padding is removed; the Tonie writer pads the packets to fill its pages.
+pub fn tonie_ready_opus_packets(path: &Path) -> Result<Option<Vec<Vec<u8>>>, Error> {
+    if !is_ogg_opus(path)? {
+        return Ok(None);
+    }
+    let mut reader = ogg::reading::PacketReader::new(BufReader::new(File::open(path)?));
+    let invalid = |msg: &str| Error::InvalidFile(format!("{}: {msg}", path.display()));
+    let mut next_packet = || reader.read_packet().map_err(|e| invalid(&e.to_string()));
+
+    let head = next_packet()?.ok_or_else(|| invalid("missing OpusHead"))?;
+    /* channels, and the channel mapping family 0 (mono or stereo, no multistream) */
+    if head.data.len() < 19 || head.data[9] != CHANNELS as u8 || head.data[18] != 0 {
+        return Ok(None);
+    }
+    next_packet()?.ok_or_else(|| invalid("missing OpusTags"))?;
+
+    let mut packets = Vec::new();
+    while let Some(packet) = next_packet()? {
+        let mut data = packet.data;
+        if opus::packet::get_nb_samples(&data, SAMPLE_RATE).ok() != Some(FRAME_SAMPLES) {
+            return Ok(None);
+        }
+        if let Ok(len) = opus::packet::unpad(&mut data) {
+            data.truncate(len);
+        }
+        packets.push(data);
+    }
+    Ok((!packets.is_empty()).then_some(packets))
 }
 
 fn decode_symphonia(path: &Path, sink: &mut dyn FnMut(&[f32]) -> Result<(), Error>, progress: &mut dyn FnMut(f64)) -> Result<(), Error> {

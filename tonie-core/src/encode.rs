@@ -25,6 +25,9 @@ pub struct EncodeOptions {
     pub vbr: bool,
     /// Directory with `0001.mp3`, `0002.mp3`, ... that get prepended to each track
     pub prefix_dir: Option<PathBuf>,
+    /// Copy Ogg Opus files that fit a Tonie (stereo, 20 ms packets) without re-encoding them,
+    /// e.g. tracks exported from a Tonie. Not with prefix files.
+    pub copy_opus: bool,
 }
 
 impl Default for EncodeOptions {
@@ -34,6 +37,7 @@ impl Default for EncodeOptions {
             bitrate: 96000,
             vbr: false,
             prefix_dir: None,
+            copy_opus: true,
         }
     }
 }
@@ -200,6 +204,7 @@ fn build_with<E: FrameEncoder, W: Write + Seek>(
 
     let mut chapters = Vec::new();
     let mut last_index = 0u32;
+    let mut previous_copied = false;
     let mut warned = false;
 
     for (index, source) in tracks.iter().enumerate() {
@@ -209,8 +214,18 @@ fn build_with<E: FrameEncoder, W: Write + Seek>(
             break;
         }
 
-        let after_copy = index > 0 && matches!(tracks[index - 1], TrackSource::Packets { .. });
+        let after_copy = previous_copied;
+        let opus = match source {
+            TrackSource::File(file) if options.copy_opus && options.prefix_dir.is_none() => audio_in::tonie_ready_opus_packets(file)?,
+            _ => None,
+        };
+        previous_copied = opus.is_some() || matches!(source, TrackSource::Packets { .. });
         let result = match source {
+            TrackSource::File(file) if opus.is_some() => {
+                progress.file_start(track, file);
+                progress.info(&format!("{}: Ogg Opus, copied without re-encoding", display_name(file)));
+                copy_track(&mut writer, opus.as_deref().unwrap_or_default(), &mut chapters, &mut last_index)
+            }
             TrackSource::File(file) => {
                 if after_copy {
                     /* don't put the start of the track into the last page of the copied one */
@@ -375,6 +390,47 @@ mod build_tests {
 
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures")
+    }
+
+    #[test]
+    fn exported_tracks_come_back_without_reencoding() {
+        let original = TonieFile::open(fixtures().join("reference/album_cbr96/0A0B0C01/500304E0"), true).unwrap();
+        let tracks = original.track_packets().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let oggs = original.dump_audio_files(dir.path(), "", false, &[], None).unwrap();
+        assert_eq!(oggs.len(), 3);
+
+        /* the exported tracks and an MP3, which is encoded */
+        let mut files = oggs.clone();
+        files.push(fixtures().join("inputs/silence.mp3"));
+        let path = dir.path().join("500304E0");
+        let mut out = std::fs::File::create(&path).unwrap();
+        encode(&files, &EncodeOptions::default(), &mut out, &mut ()).unwrap();
+        drop(out);
+
+        let rebuilt = TonieFile::open(&path, true).unwrap();
+        assert!(rebuilt.hash_correct);
+        assert!(rebuilt.statistics.errors.is_empty(), "{:?}", rebuilt.statistics.errors);
+        let got = rebuilt.track_packets().unwrap();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[..3], tracks[..]);
+
+        /* with re-encoding the packets are new */
+        let mut out = std::fs::File::create(&path).unwrap();
+        let options = EncodeOptions {
+            copy_opus: false,
+            ..Default::default()
+        };
+        encode(&oggs, &options, &mut out, &mut ()).unwrap();
+        drop(out);
+        assert_ne!(TonieFile::open(&path, true).unwrap().track_packets().unwrap()[0], tracks[0]);
+
+        /* an MP3 is not an Ogg Opus file, the Opus test input is copied */
+        assert!(audio_in::tonie_ready_opus_packets(&fixtures().join("inputs/silence.mp3")).unwrap().is_none());
+        assert!(audio_in::tonie_ready_opus_packets(&fixtures().join("inputs/opus_input.ogg")).unwrap().is_some());
+        assert!(audio_in::tonie_ready_opus_packets(&fixtures().join("inputs/vorbis_input.ogg"))
+            .unwrap()
+            .is_none());
     }
 
     #[test]

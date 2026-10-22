@@ -56,7 +56,8 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
   onto the window) or add an existing Tonie file. The tracks are ordered by folder (e.g. the discs of an
   album) and ID3 track number; drag them or use Up/Down to change the order, add and remove files. The new Tonie is named after the tags
   of the files (album artist and album) or their folder. Each new Tonie gets its own audio ID, also when
-  several are made within a second.
+  several are made within a second. Ogg Opus files that fit a Tonie (stereo, 20 ms packets), e.g. tracks
+  exported with *Save as .ogg*, are copied **without re-encoding**, so they keep their quality.
 - Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
   **Change audio ID** gives a Tonie a new or a chosen audio ID without re-encoding it.
 - **Edit tracks** of an existing Tonie: add audio files, remove or reorder tracks. The tracks it keeps are
@@ -79,6 +80,26 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
 
 The live flag is the FAT hidden attribute of the Tonie file. On Linux it can only be changed on the SD card
 itself (vfat), not on a copy on another file system.
+
+### Putting your own audio on a figure
+
+The Toniebox plays the Tonie file that belongs to the UID of the figure's tag: a file in `CONTENT` on its SD card,
+in a folder named after the UID in reverse byte order (UID `E0040350010C0B0A` → `CONTENT/0A0B0C01/500304E0`).
+To give a figure your own audio, replace that file:
+
+1. Put the figure on the Toniebox once while the box is online, so it downloads the figure's Tonie onto the SD
+   card. Then switch the box off, take out the SD card and put it into your computer. TeddyBench opens it by
+   itself.
+2. Find the figure's Tonie in TeddyBench: by its name and cover, with the search, or by putting the figure on
+   an [NFC reader](#nfc-readers), which selects it. The details show its UID.
+3. To keep the original audio, export it first: *Save as .ogg* (it can be put back later without loss) or
+   *Export Tonie file*.
+4. Then either use **Edit tracks** (context menu) to replace, add or reorder tracks, or **Add...** your audio
+   files and enter the figure's UID (with an NFC reader it is filled in): the new Tonie replaces the old one.
+5. Put the SD card back into the box and put the figure on it.
+
+A Toniebox that is connected to the cloud may replace changed content with the original again, or move it into
+the TRASHCAN (see *Deleted Tonies*); keep that in mind when the box is online.
 
 ### Exporting audio
 
@@ -150,7 +171,7 @@ The settings are JSON; most of them can be changed in the menus. Edit the file w
 ```
 teddy -m info <toniefile|directory>
 teddy -m decode [-s] [-o <dir>] <toniefile|directory>
-teddy -m encode [-o <file|dir>] [-i <audio id>] [-b <kbps>] [--vbr] [-p <prefix dir>] <folder | files...>
+teddy -m encode [-o <file|dir>] [-i <audio id>] [-b <kbps>] [--vbr] [--reencode] [-p <prefix dir>] <folder | files...>
 teddy -m rename [-y] [-d] <source dir> <dest dir>
 ```
 
@@ -162,6 +183,7 @@ teddy -m rename [-y] [-d] <source dir> <dest dir>
 | `-i`, `--id` | encode: AudioID to use (default: current time) |
 | `-b`, `--bitrate` | encode: Opus bit rate in kbps |
 | `--vbr` | encode: use VBR encoding |
+| `--reencode` | encode: encode Ogg Opus files again instead of copying them unchanged |
 | `-s` | decode: export as a single `.ogg` file |
 | `-y` | rename: actually rename files (otherwise dry run) |
 | `-d` | rename: delete duplicates |
@@ -184,7 +206,9 @@ teddy -m rename <source dir> <destination dir>      Move Tonie files to readable
 ```
 
 `encode` reads MP3, Ogg Opus, Ogg Vorbis, FLAC, WAV and M4A (AAC, ALAC) files; the files of a folder are ordered by their ID3 track
-number. The bit rate must be a multiple of 24 kbps, otherwise the output file is incompatible. Prefix files
+number. Ogg Opus files that fit a Tonie (stereo, 20 ms packets) are copied without re-encoding, unless
+`--reencode` or prefix files are given; the bit rate does not apply to them. The bit rate must be a multiple
+of 24 kbps, otherwise the output file is incompatible. Prefix files
 (`0001.mp3`, `0002.mp3`, …) in the `--prefix` location are prepended to the matching track, e.g. to announce
 the track number.
 

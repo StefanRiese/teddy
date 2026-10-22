@@ -233,6 +233,8 @@ fn encoding_matches_reference_structure() {
         bitrate,
         vbr,
         prefix_dir: prefix.map(|p| fixtures().join(p)),
+        /* compared with Teddy.exe, which always encodes */
+        copy_opus: false,
     };
     /* Teddy.exe sorts directories by ID3 track number, but cannot read the NUL terminated numbers ffmpeg writes,
      * so it used the file name order. Pass the files explicitly in that order. */
