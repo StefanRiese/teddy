@@ -3,6 +3,33 @@
 Releases are tagged `rust-v<version>`. The former C# TeddyBench (`v1.x` releases) is kept in the
 `csharp-backup` branch.
 
+## 0.1.8 – 2026-10-23
+
+### New
+
+- The **reader status** has a line of its own at the bottom: a green dot when the reader is connected, amber
+  while TeddyBench looks for it, grey when it is off. With a tag on the reader, its UID and its Tonie are shown
+  (or "no Tonie on the card").
+- The `CONTENT` directory opened last is **opened again** at the next start (`LastContentDirectory`).
+- ESP with PN5180, firmware 2.4.0 or later: TeddyBench turns off its **WiFi and MQTT** (`w0`) when it connects.
+- **Regular expressions** in the search: `/pattern/`, ignoring case, e.g. `/^bibi.*hexe/`. An invalid pattern
+  finds nothing and says why.
+- The **player** has a row of its own below sorting and search, with a wider seek bar.
+
+### Fixed and improved
+
+- ESP with PN5180 on Linux and macOS: opening the port **restarted the ESP**, so it was never found ("line too
+  long" in the debug log). The DTR/RTS lines are now left alone there; Windows is unchanged.
+- ESP with PN5180: reading a tag takes it up to about a second; TeddyBench waited only 500 ms and lost the
+  reader at the first tag. It now waits up to 2 seconds.
+- A reader that restarts (e.g. an ESP connecting to WiFi) is found again within seconds instead of a minute.
+- Debug builds also write the log to the terminal.
+
+### Notes
+
+- Tested with an ESP8266 with PN5180, firmware 2.3.0 and 2.4.0, on Linux. Windows and macOS not tested with it.
+- TeddyBench does not turn the reader's WiFi on again (`w1`) when it closes.
+
 ## 0.1.7 – 2026-10-22
 
 ### New

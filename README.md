@@ -37,8 +37,8 @@ Each download contains TeddyBench and `teddy`.
 
 ## TeddyBench
 
-`teddybench [directory]` opens the given `CONTENT` directory, a `Content` folder next to the program (handy
-for a local working copy), or the first SD card with a `CONTENT` folder that shows up.
+`teddybench [directory]` opens the given `CONTENT` directory, the one opened last, a `Content` folder next to
+the program (handy for a local working copy), or the first SD card with a `CONTENT` folder that shows up.
 
 ### Features
 
@@ -46,8 +46,9 @@ for a local working copy), or the first SD card with a `CONTENT` folder that sho
   [tonies-json](https://github.com/toniebox-reverse-engineering/tonies-json) repository (`tonies.json` from
   [api.revvox.de](https://api.revvox.de/tonies.json) if GitHub fails)
   and your own names from `customTonies.json`; icon size slider, sorting by UID, product number, date or type.
-- **Search** by name, UID, folder or audio ID: start typing anywhere, Esc clears the search. Only the
-  Tonies found stay selected, so actions never affect hidden ones.
+- **Search** by name, UID, folder or audio ID: start typing anywhere, Esc clears the search. All words must be
+  found; `/pattern/` searches with a regular expression instead (ignoring case, e.g. `/^bibi.*hexe/` or
+  `/benjamin|bibi/`). Only the Tonies found stay selected, so actions never affect hidden ones.
 - Keyboard: arrow keys, Home and End select the next, first or last Tonie, Space plays it, pauses and continues;
   F1 (*Help → Keyboard shortcuts*) lists all shortcuts.
 - Details of the selected Tonie (UID, date, size, audio ID, length) with its track list. Playback with
@@ -125,7 +126,8 @@ remembered.
 Enable the reader and choose its type in the *NFC reader* menu. It is searched on the USB serial ports; the
 UID of a tag put on it selects its Tonie (also when the card is opened later) and is filled in when assigning
 a UID or creating a Tonie. UID fields start with `E0040350`, so only the last 8 digits printed on the tag
-need to be entered.
+need to be entered. The second line at the bottom shows the reader (green: connected, amber: looking for
+it, grey: off), the UID of the tag on it and its Tonie.
 `TEDDYBENCH_NFC_PORT=<port>` uses that port instead of searching. On Linux the user needs to be in the
 `dialout` group.
 
@@ -135,7 +137,8 @@ need to be entered.
   any firmware. Flash the firmware with the Proxmark3 tools.
 - **ESP with PN5180:** an ESP microcontroller with a PN5180 NFC module, connected via USB serial at
   115200 baud. TeddyBench detects it by sending `v` and expecting a response containing `Pn5180Esp`; `i`
-  returns the 16-character tag UID and `u` unlocks a tag in privacy mode (reply `ok`).
+  returns the 16-character tag UID and `u` unlocks a tag in privacy mode (reply `ok`). With firmware 2.4.0 or
+  later, TeddyBench turns off its WiFi and MQTT with `w0` (`w1` turns them on again).
 
 ### Data files and settings
 
@@ -159,6 +162,7 @@ The settings are JSON; most of them can be changed in the menus. Edit the file w
 | `CacheImageSize` | `256` | Resolution of cached cover images in pixels. |
 | `IconSize` | `128` | Size of the covers in the grid, in pixels. |
 | `SortBy` | `"Date"` | Sort order: `"UID"`, `"Product"`, `"Date"` or `"Type"`. |
+| `LastContentDirectory` | `""` | The `CONTENT` directory opened last, opened again at the next start. |
 | `CustomTagNonPrintableMargin` | `15` | Page margin the printer cannot print on, in mm. |
 | `CustomTagGapX` / `CustomTagGapY` | `5` | Horizontal / vertical gap between two covers, in mm. |
 | `CustomTagInitialColumn` / `CustomTagInitialRow` | `0` | Position of the first cover on the first page, so you can reuse a partially printed sheet. |
