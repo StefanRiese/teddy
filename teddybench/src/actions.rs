@@ -9,7 +9,7 @@ use tonie_core::encode::{EncodeOptions, EncodeProgress, TrackSource};
 use tonie_core::TonieFile;
 
 use crate::export::JobStatus;
-use crate::uid::file_for_uid;
+use crate::uid::{file_for_uid, random_uid};
 
 /// Initial order of files for a new Tonie: grouped by folder (e.g. the discs of an album), within a
 /// folder by ID3 track number, files without one after those, then by name.
@@ -238,6 +238,18 @@ pub fn reassign_uid(file: &Path, new_uid: &str, content_dir: &Path) -> Result<Op
     Ok(remove_dir_if_empty(file, content_dir))
 }
 
+/// Moves the Tonie that has `uid` to a random UID that is not used yet, so `uid` can be given to
+/// another one. Returns the new UID.
+pub fn free_uid(uid: &str, content_dir: &Path) -> Result<String, String> {
+    let file = file_for_uid(content_dir, uid);
+    let new_uid = std::iter::repeat_with(random_uid)
+        .take(100)
+        .find(|u| !file_for_uid(content_dir, u).exists())
+        .ok_or("No free random UID found")?;
+    reassign_uid(&file, &new_uid, content_dir)?;
+    Ok(new_uid)
+}
+
 /// Gives a Tonie file another audio ID, without re-encoding the audio. The new file is written
 /// next to the old one first and then replaces it.
 pub fn change_audio_id(file: &Path, audio_id: u32) -> Result<(), String> {
@@ -456,6 +468,19 @@ mod tests {
 
         delete_tonie(&moved, content.path()).unwrap();
         assert_eq!(std::fs::read_dir(content.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn frees_a_used_uid() {
+        let content = tempfile::tempdir().unwrap();
+        let taken = file_for_uid(content.path(), "E0040350010C0B0A");
+        std::fs::create_dir_all(taken.parent().unwrap()).unwrap();
+        std::fs::write(&taken, b"tonie").unwrap();
+
+        let new_uid = free_uid("E0040350010C0B0A", content.path()).unwrap();
+        assert_ne!(new_uid, "E0040350010C0B0A");
+        assert!(!taken.exists());
+        assert_eq!(std::fs::read(file_for_uid(content.path(), &new_uid)).unwrap(), b"tonie");
     }
 
     #[test]

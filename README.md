@@ -60,7 +60,8 @@ the program (handy for a local working copy), or the first SD card with a `CONTE
   of the files (album artist and album) or their folder. Each new Tonie gets its own audio ID, also when
   several are made within a second. Ogg Opus files that fit a Tonie (stereo, 20 ms packets), e.g. tracks
   exported with *Save as .ogg*, are copied **without re-encoding**, so they keep their quality.
-- Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager.
+- Rename, delete, toggle the live flag, assign a new or a **random UID**, show in the file manager. If the new
+  UID already belongs to another Tonie, TeddyBench asks to give that one a random UID first.
   **Change audio ID** gives a Tonie a new or a chosen audio ID without re-encoding it.
 - **Edit tracks** of an existing Tonie: add audio files, remove or reorder tracks. The tracks it keeps are
   copied without re-encoding, so they keep their quality; only added files are encoded.

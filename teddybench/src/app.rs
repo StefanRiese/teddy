@@ -156,6 +156,12 @@ enum Dialog {
         name: String,
     },
     ConfirmDelete(Vec<PathBuf>),
+    /// The UID to assign to `path` belongs to `other`, which gets a random UID if confirmed
+    ConfirmUidTaken {
+        path: PathBuf,
+        uid: String,
+        other: PathBuf,
+    },
     /// Remove the live flag from these Tonies
     ConfirmRemoveLive(Vec<PathBuf>),
     Export(ExportDialog),
@@ -2208,7 +2214,49 @@ impl TeddyBenchApp {
                 if ok {
                     let (path, uid) = (path.clone(), uid.to_ascii_uppercase());
                     if let Some(dir) = self.current_dir.clone() {
+                        let other = uid::file_for_uid(&dir, &uid);
+                        if other != path && other.exists() {
+                            self.dialog = Some(Dialog::ConfirmUidTaken { path, uid, other });
+                            return;
+                        }
                         self.assign_uid(&path, &uid, &dir);
+                    }
+                    if self.dialog.is_some() {
+                        return;
+                    }
+                }
+                keep = !(ok || cancel || r.should_close());
+            }
+            Dialog::ConfirmUidTaken { path, uid, other } => {
+                let name_of = |p: &PathBuf| {
+                    self.entries
+                        .iter()
+                        .find(|e| &e.file.path == p)
+                        .map(|e| e.name().replace('\n', " "))
+                        .unwrap_or_else(|| p.display().to_string())
+                };
+                let (name, other_name) = (name_of(path), name_of(other));
+                let r = egui::Modal::new(Id::unique("uid_taken")).show(ctx, |ui| {
+                    ui.heading("UID already assigned");
+                    ui.label(format!("{uid} already belongs to \"{other_name}\"."));
+                    ui.label(format!("Give \"{other_name}\" a random UID and assign {uid} to \"{name}\"?"));
+                    ui.horizontal(|ui| (ui.button("Move and assign").clicked(), ui.button("Cancel").clicked()))
+                        .inner
+                });
+                let (ok, cancel) = r.inner;
+                if ok {
+                    self.stop_playback();
+                    let (path, uid) = (path.clone(), uid.clone());
+                    let dir = self.current_dir.clone().unwrap_or_default();
+                    match actions::free_uid(&uid, &dir) {
+                        Ok(new_uid) => {
+                            applog::info(format!("Moved \"{other_name}\" from {uid} to {new_uid}"));
+                            self.assign_uid(&path, &uid, &dir);
+                        }
+                        Err(e) => {
+                            self.message("Re-assigning UID failed", e);
+                            self.scanner.send(Command::Rescan);
+                        }
                     }
                     if self.dialog.is_some() {
                         return;
@@ -3131,6 +3179,10 @@ fn details(ui: &mut egui::Ui, e: &Entry, playing_track: Option<usize>) -> Option
             Some(Err(err)) => row("Error", err.clone()),
             None => row("", "reading...".into()),
         }
+        ui.label(egui::RichText::new("File").weak());
+        /* long paths wrap; the text can be selected and copied */
+        ui.add(egui::Label::new(e.file.path.display().to_string()).wrap().selectable(true));
+        ui.end_row();
     });
     if let (Some(info), Some(a)) = (e.info(), e.analysis()) {
         if !info.tracks.is_empty() {
