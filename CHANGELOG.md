@@ -3,6 +3,24 @@
 Releases are tagged `rust-v<version>`. The former C# TeddyBench (`v1.x` releases) is kept in the
 `csharp-backup` branch.
 
+## 0.1.9 – 2026-10-23
+
+### New
+
+- **Choose the reader's port** in the *NFC reader* menu: *Search USB ports* as before, or any serial port
+  (setting `NfcPort`). A chosen port is tried again every 2 seconds until the reader answers.
+- Assigning a UID that **already belongs to another Tonie** asks to give that Tonie a random UID first, then
+  assigns the UID. Before, this failed.
+- The details of a Tonie show the **path of its file**; it can be selected and copied.
+
+### Fixed and improved
+
+- The checkbox *Autodetect reader* is the switch for the reader: it is now called **Use NFC reader**.
+
+### Notes
+
+- The ESP with PN5180 was confirmed working on Windows too (with 0.1.8).
+
 ## 0.1.8 – 2026-10-23
 
 ### New
