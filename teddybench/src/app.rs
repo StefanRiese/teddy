@@ -223,8 +223,8 @@ enum TagOperation {
 /// The NFC reader and what it reported
 #[derive(Default)]
 struct Nfc {
-    /// The kind the running reader looks for
-    kind: Option<ReaderKind>,
+    /// The kind the running reader looks for, and the port chosen for it (none: searched)
+    kind: Option<(ReaderKind, Option<String>)>,
     reader: Option<Reader>,
     device: Option<DeviceInfo>,
     /// The tag on the reader
@@ -429,7 +429,8 @@ impl TeddyBenchApp {
 
     /// Starts or stops the NFC reader as the settings say
     fn update_reader(&mut self, ctx: &egui::Context) {
-        let kind = self.settings.nfc_enabled.then(|| ReaderKind::from_setting(&self.settings.nfc_type));
+        let port = Some(self.settings.nfc_port.clone()).filter(|p| !p.is_empty());
+        let kind = self.settings.nfc_enabled.then(|| (ReaderKind::from_setting(&self.settings.nfc_type), port));
         if kind == self.nfc.kind {
             return;
         }
@@ -440,13 +441,13 @@ impl TeddyBenchApp {
         self.uid_found(None);
         let last_dump = std::mem::take(&mut self.nfc.last_dump);
         self.nfc = Nfc {
-            kind,
+            kind: kind.clone(),
             last_dump,
             ..Default::default()
         };
-        if let Some(kind) = kind {
+        if let Some((kind, port)) = kind {
             let ctx = ctx.clone();
-            self.nfc.reader = Some(Reader::start(kind, move || ctx.request_repaint()));
+            self.nfc.reader = Some(Reader::start(kind, port, move || ctx.request_repaint()));
         }
     }
 
@@ -1234,13 +1235,37 @@ impl TeddyBenchApp {
 
     fn nfc_menu(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let mut changed = ui
-            .checkbox(&mut self.settings.nfc_enabled, "Autodetect reader")
-            .on_hover_text("Look for the reader on the USB serial ports. The UID of a tag on it selects its Tonie and is filled in where one is asked for.")
+            .checkbox(&mut self.settings.nfc_enabled, "Use NFC reader")
+            .on_hover_text("Look for the reader of the type below on the USB serial ports and connect to it. The UID of a tag on it selects its Tonie and is filled in where one is asked for.")
             .changed();
         let mut kind = ReaderKind::from_setting(&self.settings.nfc_type);
         for k in ReaderKind::ALL {
             changed |= ui.radio_value(&mut kind, k, k.label()).changed();
         }
+        ui.horizontal(|ui| {
+            ui.label("Port");
+            const SEARCH: &str = "Search USB ports";
+            let port = &mut self.settings.nfc_port;
+            let selected = if port.is_empty() { SEARCH.to_string() } else { port.clone() };
+            egui::ComboBox::from_id_salt("nfc port")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(port, String::new(), SEARCH)
+                        .on_hover_text("Try every USB serial port that shows up")
+                        .changed();
+                    let mut ports = rfid::available_ports();
+                    /* a chosen port that is not there (yet) stays selectable */
+                    if !port.is_empty() && !ports.contains(port) {
+                        ports.push(port.clone());
+                    }
+                    for p in ports {
+                        changed |= ui.selectable_value(port, p.clone(), p).changed();
+                    }
+                })
+                .response
+                .on_hover_text("The serial port of the reader. Choose one if the reader is not found by searching.");
+        });
         if changed {
             self.settings.nfc_type = kind.setting().into();
             self.save_settings();
@@ -1735,7 +1760,7 @@ impl TeddyBenchApp {
                     .on_hover_text("Connect the reader via USB. The debug log tells which ports were tried.");
             } else {
                 dot(ui, ui.visuals().weak_text_color());
-                ui.weak("No reader").on_hover_text("Turn on \"Autodetect reader\" in the NFC reader menu.");
+                ui.weak("No reader").on_hover_text("Turn on \"Use NFC reader\" in the NFC reader menu.");
             }
             return;
         };

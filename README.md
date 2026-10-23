@@ -128,7 +128,8 @@ UID of a tag put on it selects its Tonie (also when the card is opened later) an
 a UID or creating a Tonie. UID fields start with `E0040350`, so only the last 8 digits printed on the tag
 need to be entered. The second line at the bottom shows the reader (green: connected, amber: looking for
 it, grey: off), the UID of the tag on it and its Tonie.
-`TEDDYBENCH_NFC_PORT=<port>` uses that port instead of searching. On Linux the user needs to be in the
+If it is not found, choose its *Port* in the menu instead of *Search USB ports*;
+`TEDDYBENCH_NFC_PORT=<port>` does the same for one start. On Linux the user needs to be in the
 `dialout` group.
 
 - **Proxmark3:** unlocking tags in privacy mode needs the firmware with the
@@ -157,6 +158,7 @@ The settings are JSON; most of them can be changed in the menus. Edit the file w
 |---|---|---|
 | `NfcEnabled` | `false` | Enable the NFC reader. |
 | `NfcType` | `"Proxmark3"` | NFC reader type: `"Proxmark3"` or `"Pn5180Esp"`. |
+| `NfcPort` | `""` | Serial port of the reader, e.g. `"/dev/ttyUSB0"` or `"COM3"`. Empty: search the USB serial ports. |
 | `DebugWindow` | `false` | Show the debug window. |
 | `DownloadJson` | `true` | Download `toniesV2.json` on startup. Set to `false` to keep a locally modified file: of `toniesV2.json` and `tonies.json` (old format), the one changed last is used. If neither exists, it is still downloaded. |
 | `CacheImageSize` | `256` | Resolution of cached cover images in pixels. |

@@ -13,6 +13,8 @@ pub struct Settings {
     pub username: String,
     pub nfc_enabled: bool,
     pub nfc_type: String,
+    /// The reader's serial port; empty: search the USB serial ports
+    pub nfc_port: String,
     pub debug_window: bool,
     pub download_json: bool,
     pub cache_image_size: u32,
@@ -43,6 +45,7 @@ impl Default for Settings {
             username: String::new(),
             nfc_enabled: false,
             nfc_type: "Proxmark3".into(),
+            nfc_port: String::new(),
             debug_window: false,
             download_json: true,
             cache_image_size: 256,

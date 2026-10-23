@@ -152,7 +152,8 @@ pub struct Reader {
 
 impl Reader {
     /// `notify` is called after each event, e.g. to repaint the window.
-    pub fn start(kind: ReaderKind, notify: impl Fn() + Send + 'static) -> Reader {
+    /// `port` is the one chosen in the settings; without one the USB serial ports are searched.
+    pub fn start(kind: ReaderKind, port: Option<String>, notify: impl Fn() + Send + 'static) -> Reader {
         let (requests, request_rx) = channel();
         let (event_tx, events) = channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -164,7 +165,10 @@ impl Reader {
             notify: Box::new(notify),
             stop: stop.clone(),
             cancel: cancel.clone(),
-            ports: Ports::default(),
+            ports: Ports {
+                chosen: port,
+                ..Default::default()
+            },
             device: None,
             tag: None,
             reported: None,
@@ -232,6 +236,19 @@ struct Ports {
     /// Ports a reader was found at: while it restarts (an ESP connects to WiFi first), it does not
     /// answer, so these are tried again soon
     had_reader: HashSet<String>,
+    /// The port chosen in the settings, tried instead of searching
+    chosen: Option<String>,
+}
+
+/// All serial ports, to choose the reader's port from
+pub fn available_ports() -> Vec<String> {
+    serialport::available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.port_name)
+        /* on macOS every device is there twice, the tty. one waits for a carrier on open */
+        .filter(|p| !p.starts_with("/dev/tty."))
+        .collect()
 }
 
 /// A port that could not be opened (busy, e.g. still closed by a reader stopped a moment ago, or
@@ -242,12 +259,13 @@ const RETRY_PROBE: Duration = Duration::from_secs(60);
 
 impl Ports {
     /// USB serial ports that are worth a try: present for a second (so the device has booted),
-    /// and not failed recently (see [`RETRY_OPEN`], [`RETRY_PROBE`]). `TEDDYBENCH_NFC_PORT` names the port instead, e.g.
-    /// for a reader that is not connected through USB.
+    /// and not failed recently (see [`RETRY_OPEN`], [`RETRY_PROBE`]). `TEDDYBENCH_NFC_PORT` or the
+    /// port chosen in the settings is tried instead, e.g. for a reader that is not connected through USB.
     fn candidates(&mut self, prefix: &str) -> Vec<String> {
-        let present: Vec<String> = match std::env::var("TEDDYBENCH_NFC_PORT") {
-            Ok(port) if !port.is_empty() => vec![port],
-            _ => serialport::available_ports()
+        let fixed = std::env::var("TEDDYBENCH_NFC_PORT").ok().filter(|p| !p.is_empty()).or(self.chosen.clone());
+        let present: Vec<String> = match fixed {
+            Some(port) => vec![port],
+            None => serialport::available_ports()
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|p| matches!(p.port_type, serialport::SerialPortType::UsbPort(_)))
@@ -387,7 +405,9 @@ impl Worker {
                 Ok(None) => applog::debug(format!("{prefix} No {} at {port}", self.kind.label())),
                 Err(e) => applog::debug(format!("{prefix} No {} at {port}: {e}", self.kind.label())),
             }
-            let retry = if self.ports.had_reader.contains(&port) { RETRY_OPEN } else { RETRY_PROBE };
+            /* a reader found there before, or chosen by the user, is probably just restarting */
+            let expected = self.ports.had_reader.contains(&port) || self.ports.chosen.as_ref() == Some(&port);
+            let retry = if expected { RETRY_OPEN } else { RETRY_PROBE };
             self.ports.failed(&port, retry);
         }
         None
