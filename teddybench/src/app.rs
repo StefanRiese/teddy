@@ -2,9 +2,9 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
