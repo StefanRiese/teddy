@@ -18,6 +18,7 @@ miniz_oxide = "0.9.1"
 mp3lame-encoder = "0.2.5"
 opus = "0.4.0"
 pdf-writer = "0.15.0"
+regex-lite = "0.1.9"
 rfd = "0.17.2"
 # no libudev: on Linux the ports are found through /sys
 serialport = { version = "4.10.1", default-features = false }

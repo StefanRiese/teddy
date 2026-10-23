@@ -36,6 +36,10 @@ const CAPACITY: usize = 5000;
 static LOG: Mutex<VecDeque<Line>> = Mutex::new(VecDeque::new());
 
 pub fn log(level: Level, text: impl Into<String>) {
+    let text = text.into();
+    if cfg!(debug_assertions) {
+        eprintln!("{} {}", level.label(), text);
+    }
     let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
     if log.len() >= CAPACITY {
         log.pop_front();
@@ -43,7 +47,7 @@ pub fn log(level: Level, text: impl Into<String>) {
     log.push_back(Line {
         time: SystemTime::now(),
         level,
-        text: text.into(),
+        text,
     });
 }
 

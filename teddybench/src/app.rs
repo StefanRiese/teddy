@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -313,6 +314,8 @@ pub struct TeddyBenchApp {
     pending_names: HashMap<PathBuf, String>,
     /// Only Tonies matching this are shown
     search: String,
+    /// `search` parsed, so a pattern is compiled once and not for every Tonie
+    search_query: std::cell::RefCell<Option<(String, Rc<teddybench::library::Query>)>>,
     /// Select the Tonie of the tag on the reader when the files of a newly opened card arrive
     select_tag_on_load: bool,
     /// The rows of the grid as last drawn (entry indices), for moving with the arrow keys
@@ -351,12 +354,14 @@ impl TeddyBenchApp {
         let settings = Settings::load(&data_dir.settings());
         let custom_names = TonieDb::load_custom_names(&data_dir.custom_tonies_json());
 
-        /* a directory given on the command line, or a Content folder next to the program, like the original */
+        /* a directory given on the command line, the one opened last, or a Content folder next to the
+         * program, like the original. Without one, the first SD card that shows up is opened. */
         /* older macOS passes a process serial number (-psn_...) when started from the Finder */
         let start_dir = std::env::args_os()
             .skip(1)
             .find(|a| !a.to_string_lossy().starts_with("-psn"))
             .map(PathBuf::from)
+            .or_else(|| Some(PathBuf::from(&settings.last_content_directory)).filter(|d| d.is_dir()))
             .or_else(|| Some(teddybench::settings::install_dir()?.join("Content")).filter(|d| d.is_dir()));
 
         let ctx = cc.egui_ctx.clone();
@@ -406,6 +411,7 @@ impl TeddyBenchApp {
             last_audio_id: None,
             pending_names: HashMap::new(),
             search: String::new(),
+            search_query: Default::default(),
             select_tag_on_load: false,
             grid_rows: Vec::new(),
             player: None,
@@ -577,6 +583,11 @@ impl TeddyBenchApp {
         while let Ok(event) = self.scanner.events.try_recv() {
             match event {
                 Event::Opened(dir) => {
+                    let last = dir.to_string_lossy().into_owned();
+                    if self.settings.last_content_directory != last {
+                        self.settings.last_content_directory = last;
+                        self.save_settings();
+                    }
                     self.current_dir = Some(dir);
                     self.entries.clear();
                     self.selection.clear();
@@ -695,7 +706,19 @@ impl TeddyBenchApp {
             .unwrap_or_default();
         let file = e.file.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let audio_id = e.analysis().map(|a| format!("0x{:08X}", a.audio_id)).unwrap_or_default();
-        teddybench::library::matches_query(&[&name, &e.file.uid, &folder, &file, &audio_id], &self.search)
+        self.query().matches(&[&name, &e.file.uid, &folder, &file, &audio_id])
+    }
+
+    fn query(&self) -> Rc<teddybench::library::Query> {
+        let mut cached = self.search_query.borrow_mut();
+        match &*cached {
+            Some((text, query)) if *text == self.search => query.clone(),
+            _ => {
+                let query = Rc::new(teddybench::library::Query::parse(&self.search));
+                *cached = Some((self.search.clone(), query.clone()));
+                query
+            }
+        }
     }
 
     /// Selects the Tonie next to the current one (the anchor) in the grid as last drawn
@@ -1287,7 +1310,13 @@ impl TeddyBenchApp {
                     .desired_width(180.0)
                     .hint_text("Search"),
             );
-            let search = search.on_hover_text("Name, UID, folder or audio ID. Start typing anywhere to search, Esc clears.");
+            let search = search.on_hover_text(
+                "Name, UID, folder or audio ID. Words must all be found; /pattern/ searches with a regular expression. \
+                 Start typing anywhere to search, Esc clears.",
+            );
+            if let Some(error) = self.query().error() {
+                ui.colored_label(Color32::from_rgb(190, 60, 80), "invalid pattern").on_hover_text(error);
+            }
             if search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.search.clear();
             }
@@ -1297,8 +1326,24 @@ impl TeddyBenchApp {
             if search.changed() || self.search.is_empty() {
                 self.deselect_hidden();
             }
-            ui.separator();
 
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("{} px", self.settings.icon_size));
+                let r = ui.add(
+                    egui::Slider::new(&mut self.settings.icon_size, MIN_ICON..=MAX_ICON)
+                        .show_value(false)
+                        .step_by(8.0),
+                );
+                if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                    self.save_settings();
+                }
+                ui.label("Icons");
+            });
+        });
+
+        /* the player in a row of its own, below sorting and search */
+        ui.separator();
+        ui.horizontal(|ui| {
             let busy = self.loading_rx.is_some();
             if self.playing.is_some() {
                 let paused = self.player.as_ref().is_some_and(Player::is_paused);
@@ -1352,6 +1397,8 @@ impl TeddyBenchApp {
                 .map(|p| (p.position(), p.duration()))
                 .unwrap_or_default();
             let mut value = self.seek_drag.unwrap_or(pos.as_secs_f64());
+            /* the seek bar takes the rest of the row, next to the time */
+            ui.spacing_mut().slider_width = (ui.available_width() - 140.0).max(100.0);
             let slider = ui.add_enabled(
                 len > Duration::ZERO,
                 egui::Slider::new(&mut value, 0.0..=len.as_secs_f64().max(1.0)).show_value(false),
@@ -1367,19 +1414,6 @@ impl TeddyBenchApp {
                 format!("{}/{}", format_time(Duration::from_secs_f64(value)), format_time(len))
             } else {
                 "--:--:--/--:--:--".into()
-            });
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("{} px", self.settings.icon_size));
-                let r = ui.add(
-                    egui::Slider::new(&mut self.settings.icon_size, MIN_ICON..=MAX_ICON)
-                        .show_value(false)
-                        .step_by(8.0),
-                );
-                if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                    self.save_settings();
-                }
-                ui.label("Icons");
             });
         });
     }
@@ -1686,21 +1720,56 @@ impl TeddyBenchApp {
         result
     }
 
+    /// A dot and a text for the reader: green when connected, amber while looking for it, grey when off.
+    /// With a reader, the tag on it and its Tonie.
+    fn reader_status(&self, ui: &mut egui::Ui) {
+        const GREEN: Color32 = Color32::from_rgb(40, 140, 60);
+        const AMBER: Color32 = Color32::from_rgb(200, 140, 30);
+        let dot = |ui: &mut egui::Ui, color: Color32| ui.label(egui::RichText::new("●").color(color));
+
+        let Some(d) = &self.nfc.device else {
+            let kind = ReaderKind::from_setting(&self.settings.nfc_type);
+            if self.settings.nfc_enabled {
+                dot(ui, AMBER);
+                ui.label(format!("Looking for a {}...", kind.label()))
+                    .on_hover_text("Connect the reader via USB. The debug log tells which ports were tried.");
+            } else {
+                dot(ui, ui.visuals().weak_text_color());
+                ui.weak("No reader").on_hover_text("Turn on \"Autodetect reader\" in the NFC reader menu.");
+            }
+            return;
+        };
+
+        let mut fw = String::new();
+        if d.kind == ReaderKind::Proxmark3 {
+            fw = format!(" (FW: {}", if d.unlock_supported { "SLIX-L enabled" } else { "stock" });
+            if let (true, Some(v)) = (self.settings.debug_window, d.antenna_voltage) {
+                fw += &format!(", {v:.2} V");
+            }
+            fw += ")";
+        }
+        dot(ui, GREEN);
+        ui.label(format!("{}{fw} at {}", d.hardware, d.port))
+            .on_hover_text("The UID of the tag will be automatically used where applicable.");
+        ui.separator();
+        match &self.nfc.uid {
+            None => {
+                ui.weak("No tag");
+            }
+            Some(uid) => {
+                let tonie = self.entries.iter().find(|e| e.file.uid.eq_ignore_ascii_case(uid));
+                ui.label(egui::RichText::new(format!("Tag {uid}")).monospace());
+                match tonie {
+                    Some(e) => ui.colored_label(GREEN, format!("→ {}", e.name())),
+                    None if self.current_dir.is_some() => ui.colored_label(AMBER, "no Tonie on the card"),
+                    None => ui.weak("no SD card open"),
+                };
+            }
+        }
+    }
+
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if let Some(d) = &self.nfc.device {
-                let mut fw = String::new();
-                if d.kind == ReaderKind::Proxmark3 {
-                    fw = format!(" (FW: {}", if d.unlock_supported { "SLIX-L enabled" } else { "stock" });
-                    if let (true, Some(v)) = (self.settings.debug_window, d.antenna_voltage) {
-                        fw += &format!(", {v:.2} V");
-                    }
-                    fw += ")";
-                }
-                ui.label(format!("{}{fw} found at {}.", d.hardware, d.port))
-                    .on_hover_text("The UID of the tag will be automatically used where applicable.");
-                ui.separator();
-            }
             let mut text = if self.db.tonies.is_empty() {
                 "No tonies.json loaded, consider downloading it".to_string()
             } else {
@@ -1720,6 +1789,9 @@ impl TeddyBenchApp {
                 ui.label(format!("{shown} Tonies in {}", dir.display()));
             }
         });
+        /* the reader and the tag on it in a line of their own */
+        ui.separator();
+        ui.horizontal(|ui| self.reader_status(ui));
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {

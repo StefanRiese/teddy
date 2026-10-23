@@ -177,10 +177,53 @@ impl TonieDb {
     }
 }
 
-/// Whether every word of `query` is found in one of `fields`, ignoring case
+/// A search: words that must all be found, or `/pattern/` as a regular expression. Both ignore case.
+pub enum Query {
+    Words(Vec<String>),
+    Regex(regex_lite::Regex),
+    /// A pattern that does not compile, with the error; matches nothing
+    Invalid(String),
+}
+
+impl Query {
+    pub fn parse(query: &str) -> Query {
+        let query = query.trim();
+        /* the closing slash is optional, so the results show up while typing */
+        match query.strip_prefix('/') {
+            Some(pattern) => {
+                let pattern = pattern.strip_suffix('/').unwrap_or(pattern);
+                match regex_lite::RegexBuilder::new(pattern).case_insensitive(true).build() {
+                    Ok(re) => Query::Regex(re),
+                    Err(e) => Query::Invalid(e.to_string()),
+                }
+            }
+            None => Query::Words(query.to_lowercase().split_whitespace().map(str::to_string).collect()),
+        }
+    }
+
+    /// Whether every word is found in one of `fields`, or the pattern matches one of them
+    pub fn matches(&self, fields: &[&str]) -> bool {
+        match self {
+            Query::Words(words) => {
+                let fields: Vec<String> = fields.iter().map(|f| f.to_lowercase()).collect();
+                words.iter().all(|word| fields.iter().any(|f| f.contains(word.as_str())))
+            }
+            Query::Regex(re) => fields.iter().any(|f| re.is_match(f)),
+            Query::Invalid(_) => false,
+        }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            Query::Invalid(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// Whether every word of `query` is found in one of `fields`, ignoring case (see [`Query`])
 pub fn matches_query(fields: &[&str], query: &str) -> bool {
-    let fields: Vec<String> = fields.iter().map(|f| f.to_lowercase()).collect();
-    query.to_lowercase().split_whitespace().all(|word| fields.iter().any(|f| f.contains(word)))
+    Query::parse(query).matches(fields)
 }
 
 #[cfg(test)]
@@ -195,6 +238,18 @@ mod tests {
         assert!(matches_query(&fields, "010c0b"));
         assert!(matches_query(&fields, "5e0342"));
         assert!(!matches_query(&fields, "bibi benjamin"));
+    }
+
+    #[test]
+    fn search_with_regex() {
+        let fields = ["Bibi Blocksberg - Hexen", "E0040350010C0B0A", "0A0B0C01", "0x5E034216"];
+        assert!(matches_query(&fields, "/^bibi.*hexen$/"));
+        assert!(matches_query(&fields, "/0b0a$"));
+        assert!(matches_query(&fields, "/benjamin|blocksberg/"));
+        assert!(!matches_query(&fields, "/^hexen/"));
+        let invalid = Query::parse("/bibi(/");
+        assert!(invalid.error().is_some());
+        assert!(!invalid.matches(&fields));
     }
 
     #[test]

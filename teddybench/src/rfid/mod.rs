@@ -7,7 +7,7 @@ pub mod iso15693;
 pub mod pn5180;
 pub mod proxmark3;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -229,10 +229,14 @@ struct Ports {
     appeared: HashMap<String, Instant>,
     /// When a port that failed may be tried again
     retry_at: HashMap<String, Instant>,
+    /// Ports a reader was found at: while it restarts (an ESP connects to WiFi first), it does not
+    /// answer, so these are tried again soon
+    had_reader: HashSet<String>,
 }
 
 /// A port that could not be opened (busy, e.g. still closed by a reader stopped a moment ago, or
-/// no permission) is tried again soon; one that opened but has no reader not before a minute.
+/// no permission) is tried again soon; one that opened but has no reader not before a minute,
+/// unless a reader was found there before.
 const RETRY_OPEN: Duration = Duration::from_secs(2);
 const RETRY_PROBE: Duration = Duration::from_secs(60);
 
@@ -283,11 +287,14 @@ impl Ports {
 }
 
 fn open_port(name: &str) -> io::Result<Box<dyn serialport::SerialPort>> {
-    let mut port = serialport::new(name, 115_200)
-        .timeout(Duration::from_millis(500))
-        /* like .NET: an ESP would reset on DTR/RTS */
-        .dtr_on_open(false)
-        .open()?;
+    let builder = serialport::new(name, 115_200).timeout(Duration::from_millis(500));
+    /* An ESP resets when RTS is set and DTR is not. On Windows both start cleared, like in .NET.
+     * On Linux and macOS the open sets both: clearing them one after the other would reset it. */
+    #[cfg(windows)]
+    let builder = builder.dtr_on_open(false);
+    #[allow(unused_mut)]
+    let mut port = builder.open()?;
+    #[cfg(windows)]
     port.write_request_to_send(false).ok();
     Ok(port)
 }
@@ -373,11 +380,15 @@ impl Worker {
                 ReaderKind::Pn5180Esp => pn5180::Pn5180Esp::open(link).map(|d| d.map(|d| Box::new(d) as Box<dyn Device>)),
             };
             match device {
-                Ok(Some(d)) => return Some(d),
+                Ok(Some(d)) => {
+                    self.ports.had_reader.insert(port);
+                    return Some(d);
+                }
                 Ok(None) => applog::debug(format!("{prefix} No {} at {port}", self.kind.label())),
                 Err(e) => applog::debug(format!("{prefix} No {} at {port}: {e}", self.kind.label())),
             }
-            self.ports.failed(&port, RETRY_PROBE);
+            let retry = if self.ports.had_reader.contains(&port) { RETRY_OPEN } else { RETRY_PROBE };
+            self.ports.failed(&port, retry);
         }
         None
     }

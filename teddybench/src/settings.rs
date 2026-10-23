@@ -19,6 +19,8 @@ pub struct Settings {
     pub icon_size: u32,
     /// UID, Product, Date or Type
     pub sort_by: String,
+    /// The CONTENT directory opened last, opened again at the next start
+    pub last_content_directory: String,
 
     pub custom_tag_non_printable_margin: i32,
     pub custom_tag_gap_x: i32,
@@ -46,6 +48,7 @@ impl Default for Settings {
             cache_image_size: 256,
             icon_size: 128,
             sort_by: "Date".into(),
+            last_content_directory: String::new(),
             custom_tag_non_printable_margin: 15,
             custom_tag_gap_x: 5,
             custom_tag_gap_y: 5,
